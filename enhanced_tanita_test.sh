@@ -1,7 +1,6 @@
 #!/bin/bash
 # Complete Tanita MC-780MA Data Extraction Script - ALL 152+ Parameters
 # Features: Export ALL test results + Extended timing + Complete comprehensive data parsing
-# Output: tanita_test_data_ID_TIME.json format
 
 echo "🏥 COMPLETE TANITA MC-780MA DATA EXTRACTION - RASPBERRY PI 3"
 echo "============================================================="
@@ -537,41 +536,21 @@ def display_complete_results(data):
     print("   Bioelectrical impedance segments: {}".format(len([s for s in data['bioelectrical_impedance'].values() if s])))
     print("   Phase angle measurements: {}".format(len(data['phase_angle'])))
 
-def save_complete_data(data):
-    """Save complete data to JSON file with custom ID_TIME format"""
+def save_complete_data(data, filename):
+    """Save complete data to JSON file with enhanced formatting"""
     try:
-        # Generate timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Extract customer ID for filename
-        customer_id = "unknown"
-        if 'device_metadata' in data:
-            # First try extracted phone number
-            if 'extracted_phone_number' in data['device_metadata']:
-                customer_id = data['device_metadata']['extracted_phone_number']
-            # Then try raw ID if available
-            elif 'id' in data['device_metadata'] and data['device_metadata']['id'] != "0000000000000000":
-                # Clean the ID for filename use
-                raw_id = data['device_metadata']['id']
-                # Remove non-alphanumeric characters for filename safety
-                customer_id = ''.join(c for c in raw_id if c.isalnum())[:12]  # Limit length
-            
-        # Create filename with pattern: tanita_test_data_ID_TIME.json
-        json_filename = 'tanita_test_data_{}_{}.json'.format(customer_id, timestamp)
-        
         # Create a comprehensive data file
-        with open(json_filename, 'w') as f:
+        with open(filename, 'w') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        print("💾 Complete data saved to: {}".format(json_filename))
+        print("💾 Complete data saved to: {}".format(filename))
         
-        # Create a summary file with same naming pattern
-        summary_filename = 'tanita_test_data_{}_{}_summary.txt'.format(customer_id, timestamp)
+        # Create a summary file
+        summary_filename = filename.replace('.json', '_summary.txt')
         with open(summary_filename, 'w') as f:
             f.write("TANITA MC-780MA COMPLETE DATA EXTRACTION SUMMARY\n")
             f.write("=" * 50 + "\n")
             f.write("Extraction Time: {}\n".format(data['test_info']['timestamp']))
             f.write("Device Model: {}\n".format(data['device_metadata'].get('model', 'Unknown')))
-            f.write("Customer ID: {}\n".format(customer_id))
             
             if 'extracted_phone_number' in data['device_metadata']:
                 f.write("Customer Phone: {}\n".format(data['device_metadata']['extracted_phone_number']))
@@ -585,13 +564,12 @@ def save_complete_data(data):
             
             total_params = sum(len(section) if isinstance(section, dict) else 1 for section in data.values())
             f.write("\nTotal Parameters Extracted: {}\n".format(total_params))
-            f.write("\nFilename: {}\n".format(json_filename))
             
         print("📋 Summary saved to: {}".format(summary_filename))
-        return json_filename, summary_filename
+        return True
     except Exception as e:
         print("⚠️  Could not save data files: {}".format(e))
-        return None, None
+        return False
 
 try:
     ports = glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*')
@@ -620,7 +598,6 @@ try:
     print("📏 Step on Tanita scale now!")
     print("💡 Measurement takes 30-60 seconds, please wait for completion")
     print("🏥 Complete MC-780MA data extraction ready...")
-    print("📄 Output format: tanita_test_data_ID_TIME.json")
     print("")
     
     buffer = ""
@@ -654,13 +631,12 @@ try:
                         if parsed_data:
                             display_complete_results(parsed_data)
                             
-                            # Save complete data with custom ID_TIME filename format
-                            json_file, summary_file = save_complete_data(parsed_data)
+                            # Save complete data with timestamp
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            json_filename = 'tanita_complete_data_{}.json'.format(timestamp)
                             
-                            if json_file and summary_file:
-                                print("✅ All data successfully exported with custom filename format")
-                                print("📁 JSON Data: {}".format(json_file))
-                                print("📄 Summary: {}".format(summary_file))
+                            if save_complete_data(parsed_data, json_filename):
+                                print("✅ All data successfully exported")
                             
                             data_received = True
                             break
@@ -692,7 +668,7 @@ try:
         print("✅ Full bioelectrical impedance data captured (6 frequencies × 6 segments)")
         print("✅ All phase angle measurements recorded")
         print("✅ Complete metabolic and body composition profile")
-        print("✅ JSON and summary files exported with custom ID_TIME format")
+        print("✅ JSON and summary files exported")
         print("📊 Professional medical-grade body composition analysis complete")
         print("👍 Ready for Actiwell integration with complete data set")
         sys.exit(0)
@@ -753,8 +729,7 @@ if [ $TEST_RESULT -eq 0 ]; then
     log_result "✅ Full bioelectrical impedance data (6 frequencies × 6 segments) captured"
     log_result "✅ All phase angle measurements recorded"
     log_result "✅ Complete metabolic and body composition profile available"
-    log_result "✅ JSON and summary files exported with custom ID_TIME format"
-    log_result "📄 Filename format: tanita_test_data_ID_TIME.json"
+    log_result "✅ JSON and summary files exported automatically"
     log_result "💰 Complete professional medical-grade analysis ready!"
     log_result ""
     log_result "🚀 READY FOR ACTIWELL COMPLETE INTEGRATION:"
@@ -801,7 +776,6 @@ log_result "✅ Complete phase angle measurements (6 body regions at 50kHz)"
 log_result "✅ Professional assessment scores and ratings"
 log_result "✅ Medical-grade body composition analysis"
 log_result "✅ Complete data integrity with checksum validation"
-log_result "📄 Custom filename format: tanita_test_data_ID_TIME.json"
 
 # Hardware information for debugging
 log_result ""
@@ -847,7 +821,6 @@ Hardware: $([ "$USB_DETECTED" = true ] && echo "Compatible" || echo "Issue")
 Serial Port: $([ "$PORT_CREATED" = true ] && echo "Created" || echo "Failed")
 Communication: $([ $TEST_RESULT -eq 0 ] && echo "Working" || echo "Needs retry")
 Data Extraction: $([ $TEST_RESULT -eq 0 ] && echo "Complete (ALL 152+ parameters)" || echo "Pending")
-Output Format: tanita_test_data_ID_TIME.json
 
 Complete Feature Set:
 - Basic measurements: ✅
@@ -861,7 +834,7 @@ Complete Feature Set:
 
 Last Test: $TIMESTAMP
 Full Report: tanita_complete_test_${TIMESTAMP}.txt
-Data Files: $([ $TEST_RESULT -eq 0 ] && echo "tanita_test_data_ID_TIME.json + summary" || echo "Not created")
+Data Files: $([ $TEST_RESULT -eq 0 ] && echo "tanita_complete_data_*.json + summary" || echo "Not created")
 EOF
 
 echo ""
@@ -869,16 +842,16 @@ echo "📋 Complete comprehensive test finished!"
 echo "📄 Full results saved to: $RESULT_FILE"
 echo "📋 Summary saved to: $SUMMARY_FILE"
 if [ $TEST_RESULT -eq 0 ]; then
-    echo "📊 Complete measurement data: tanita_test_data_ID_TIME.json"
-    echo "📋 Summary file: tanita_test_data_ID_TIME_summary.txt"
+    echo "📊 Complete measurement data: tanita_complete_data_*.json"
+    echo "📋 Summary file: tanita_complete_data_*_summary.txt"
 fi
 echo ""
 echo "📂 View results:"
 echo "   cat $RESULT_FILE"
 echo "   ls -la $TEST_DIR/"
 if [ $TEST_RESULT -eq 0 ]; then
-    echo "   cat tanita_test_data_*.json | python3 -m json.tool"
-    echo "   cat tanita_test_data_*_summary.txt"
+    echo "   cat tanita_complete_data_*.json | python3 -m json.tool"
+    echo "   cat tanita_complete_data_*_summary.txt"
 fi
 echo ""
 
@@ -887,11 +860,10 @@ if [ $TEST_RESULT -eq 0 ]; then
     echo "   sudo ./deploy_tanita_complete_production.sh"
 else
     echo "🔄 Recommended: Retry test with complete measurement procedure"
-    echo "   ./enhanced_tanita_test_custom.sh"
+    echo "   ./complete_tanita_test.sh"
 fi
 
 echo ""
 echo "🏥 TANITA MC-780MA COMPLETE DATA EXTRACTION READY!"
 echo "   Professional medical-grade body composition analysis"
 echo "   ALL 152+ parameters captured for complete health assessment"
-echo "📄 Custom output format: tanita_test_data_ID_TIME.json"
