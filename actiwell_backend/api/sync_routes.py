@@ -3,8 +3,8 @@
 # ====================================================================================
 
 from flask import Blueprint, request, jsonify
-from app import app_state, token_required
-from models import BodyMeasurement
+from run import app_state, token_required
+from actiwell_backend.models import BodyMeasurement
 import logging
 
 logger = logging.getLogger(__name__)

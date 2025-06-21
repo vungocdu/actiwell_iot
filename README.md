@@ -1,63 +1,65 @@
-# ACTIWELL BACKEND - HƯỚNG DẪN SETUP VÀ CHẠY HỆ THỐNG
+ACTIWELL BACKEND - HƯỚNG DẪN CÀI ĐẶT VÀ TRIỂN KHAI
 
-## 📋 BƯỚC 1: CHUẨN BỊ MÔI TRƯỜNG
+Tài liệu này hướng dẫn cách cài đặt và chạy hệ thống Actiwell Backend trên một máy chủ Linux (ví dụ: Raspberry Pi, Ubuntu Server). Hệ thống được thiết kế theo cấu trúc package và sử dụng Application Factory pattern để đảm bảo tính ổn định và khả năng mở rộng.
 
-### 1.1 Tạo cấu trúc thư mục
-```bash
-# Tạo thư mục project
+📋 BƯỚC 1: CHUẨN BỊ MÔI TRƯỜNG
+1.1. Cập nhật hệ thống
+Generated bash
+sudo apt update && sudo apt full-upgrade -y
+
+1.2. Cài đặt phần mềm cần thiết
+Generated bash
+# Cài đặt Python, môi trường ảo, MariaDB (tương thích MySQL) và công cụ USB
+sudo apt install -y python3 python3-pip python3-venv mariadb-server usbutils
+
+1.3. Tạo người dùng và cấu trúc thư mục
+# Tạo thư mục project gốc
 sudo mkdir -p /opt/actiwell
 cd /opt/actiwell
 
-# Tạo các thư mục con
-sudo mkdir -p {templates,static,routes,logs,data}
+# Tạo người dùng 'actiwell' riêng cho ứng dụng để tăng cường bảo mật
+sudo useradd -r -s /bin/false -d /opt/actiwell actiwell
 
-# Tạo user cho ứng dụng
-sudo useradd -r -s /bin/bash -d /opt/actiwell actiwell
+# Gán quyền sở hữu thư mục cho người dùng vừa tạo
 sudo chown -R actiwell:actiwell /opt/actiwell
-```
 
-### 1.2 Cài đặt dependencies
-```bash
-# Cập nhật system
-sudo apt update && sudo apt upgrade -y
+📁 BƯỚC 2: THIẾT LẬP MÃ NGUỒN ỨNG DỤNG
+2.1. Cấu trúc thư mục ứng dụng
 
-# Cài đặt Python và MySQL
-sudo apt install -y python3 python3-pip python3-venv mysql-server
+Ứng dụng được tổ chức dưới dạng một package Python (actiwell_backend).
 
-# Cài đặt USB và serial support
-sudo apt install -y usbutils setserial
-```
-
-## 📁 BƯỚC 2: TẠO CÁC FILE CẦN THIẾT
-
-### 2.1 File cấu trúc
-```
+Generated code
 /opt/actiwell/
-├── app.py                    # Main Flask application
-├── config.py                 # Configuration
-├── models.py                 # Data models
-├── database_manager.py       # Database operations
-├── device_manager.py         # Device communication
-├── actiwell_api.py          # Actiwell API integration
-├── requirements.txt          # Python dependencies
-├── .env                     # Environment variables
-├── routes/
-│   ├── __init__.py
-│   ├── device_routes.py
-│   ├── measurement_routes.py
-│   └── sync_routes.py
-├── templates/
-│   ├── dashboard.html
-│   ├── error.html
-│   └── initializing.html
-├── static/                  # CSS, JS files
-├── logs/                    # Application logs
-└── data/                    # Raw measurement data
-```
+├── run.py                 # File thực thi chính để khởi động server
+├── config.py              # File cấu hình trung tâm
+├── requirements.txt       # Danh sách các thư viện Python
+├── .env                   # Biến môi trường (cơ sở dữ liệu, API keys)
+└── actiwell_backend/      # PACKAGE CHÍNH CỦA ỨNG DỤNG
+    ├── __init__.py        # Application Factory (create_app)
+    ├── models.py          # Models dữ liệu
+    ├── database_manager.py# Logic cơ sở dữ liệu
+    ├── device_manager.py  # Logic giao tiếp thiết bị
+    ├── actiwell_api.py    # Logic tích hợp Actiwell API
+    │
+    ├── api/               # Chứa các API Blueprints
+    │   ├── __init__.py
+    │   ├── auth_routes.py
+    │   └── device_routes.py
+    │
+    ├── services/          # Chứa các tiến trình chạy nền
+    │   ├── __init__.py
+    │   ├── measurement_processor.py
+    │   └── sync_retry.py
+    │
+    ├── static/            # Tài nguyên tĩnh (CSS, JS)
+    └── templates/         # Giao diện HTML (Jinja2)
 
-### 2.2 Tạo requirements.txt
-```bash
-cat > /opt/actiwell/requirements.txt << 'EOF'
+2.2. Sao chép mã nguồn
+
+Sao chép tất cả các file mã nguồn vào máy chủ, đảm bảo đúng cấu trúc thư mục như trên.
+
+2.3. Tạo file requirements.txt
+
 Flask==2.3.3
 Flask-CORS==4.0.0
 mysql-connector-python==8.1.0
@@ -66,447 +68,182 @@ requests==2.31.0
 PyJWT==2.8.0
 python-dotenv==1.0.0
 psutil==5.9.5
-EOF
-```
 
-### 2.3 Tạo .env configuration
-```bash
-cat > /opt/actiwell/.env << 'EOF'
+2.4. Tạo file cấu hình .env
+
+File này chứa các thông tin nhạy cảm. Tuyệt đối không đưa file này lên Git.
+
+sudo nano /opt/actiwell/.env
+
+Generated env
 # Database Configuration
 DB_HOST=localhost
 DB_USER=actiwell_user
-DB_PASSWORD=actiwell_pass123
+DB_PASSWORD=your_secure_password_here # <--- THAY ĐỔI MẬT KHẨU NÀY
 DB_NAME=actiwell_measurements
 DB_POOL_SIZE=5
 
 # Actiwell API Configuration (UPDATE THESE VALUES)
-ACTIWELL_API_URL=https://api.actiwell.com
-ACTIWELL_API_KEY=your_api_key_here
-ACTIWELL_LOCATION_ID=1
+ACTIWELL_API_URL=https://api.actiwell.com # <--- Cập nhật URL API
+ACTIWELL_API_KEY=your_api_key_here       # <--- Cập nhật API Key
+ACTIWELL_LOCATION_ID=1                   # <--- Cập nhật Location ID
 
 # Application Configuration
-SECRET_KEY=actiwell-secret-key-2024-change-this-in-production
+SECRET_KEY=a_very_long_and_random_secret_key_for_production # <--- THAY ĐỔI SECRET KEY NÀY
 JWT_EXPIRE_HOURS=24
 WEB_PORT=5000
 WEB_HOST=0.0.0.0
 FLASK_DEBUG=False
 
 # Device Configuration
-TANITA_BAUDRATE=9600
-INBODY_BAUDRATE=9600
-DEVICE_TIMEOUT=5
 AUTO_DETECT_DEVICES=True
+DEVICE_TIMEOUT=5
 
-# Storage Paths
-DATA_STORAGE_PATH=/opt/actiwell/data
-LOG_STORAGE_PATH=/opt/actiwell/logs
-EOF
-```
+sudo chown actiwell:actiwell /opt/actiwell/.env
+sudo chmod 600 /opt/actiwell/.env
 
-### 2.4 Copy source code files
+🗄️ BƯỚC 3: CÀI ĐẶT CƠ SỞ DỮ LIỆU
+3.1. Bảo mật MariaDB
 
-- `app.py` - Flask Application Core
-- `config.py` - Configuration
-- `models.py` - Data Models
-- `database_manager.py` - Database Manager
-- `device_manager.py` - Device Manager
-- `actiwell_api.py` - Actiwell API Integration
-- `routes/*.py` - API Routes
-
-## 🗄️ BƯỚC 3: SETUP DATABASE
-
-### 3.1 Cấu hình MySQL
-```bash
-# Secure MySQL installation
+Chạy script bảo mật và đặt mật khẩu root cho cơ sở dữ liệu.
 sudo mysql_secure_installation
 
-# Tạo database và user
-sudo mysql -u root -p << 'EOF'
+3.2. Tạo Database và User
+
+Đăng nhập vào MariaDB và chạy các lệnh SQL sau:
+
+sudo mysql -u root -p
+
 CREATE DATABASE actiwell_measurements CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'actiwell_user'@'localhost' IDENTIFIED BY 'actiwell_pass123';
+CREATE USER 'actiwell_user'@'localhost' IDENTIFIED BY 'your_secure_password_here'; -- Sử dụng mật khẩu đã đặt trong file .env
 GRANT ALL PRIVILEGES ON actiwell_measurements.* TO 'actiwell_user'@'localhost';
 FLUSH PRIVILEGES;
 EXIT;
-EOF
-```
 
-### 3.2 Tạo database schema
-```sql
--- Chạy script này để tạo tables
-USE actiwell_measurements;
 
--- Body measurements table
-CREATE TABLE body_measurements (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    measurement_uuid VARCHAR(36) UNIQUE NOT NULL,
-    device_id VARCHAR(50) NOT NULL,
-    device_type VARCHAR(20) NOT NULL,
-    customer_phone VARCHAR(20) NOT NULL,
-    customer_id INT NULL,
-    measurement_timestamp DATETIME NOT NULL,
-    
-    -- Basic measurements
-    weight_kg DECIMAL(5,2) NULL,
-    height_cm DECIMAL(5,2) NULL,
-    bmi DECIMAL(5,2) NULL,
-    
-    -- Body composition
-    body_fat_percent DECIMAL(5,2) NULL,
-    muscle_mass_kg DECIMAL(5,2) NULL,
-    bone_mass_kg DECIMAL(5,2) NULL,
-    total_body_water_percent DECIMAL(5,2) NULL,
-    protein_percent DECIMAL(5,2) NULL,
-    mineral_percent DECIMAL(5,2) NULL,
-    
-    -- Advanced metrics
-    visceral_fat_rating INT NULL,
-    subcutaneous_fat_percent DECIMAL(5,2) NULL,
-    skeletal_muscle_mass_kg DECIMAL(5,2) NULL,
-    
-    -- Metabolic data
-    bmr_kcal INT NULL,
-    metabolic_age INT NULL,
-    
-    -- Segmental analysis
-    right_arm_muscle_kg DECIMAL(5,2) NULL,
-    left_arm_muscle_kg DECIMAL(5,2) NULL,
-    trunk_muscle_kg DECIMAL(5,2) NULL,
-    right_leg_muscle_kg DECIMAL(5,2) NULL,
-    left_leg_muscle_kg DECIMAL(5,2) NULL,
-    
-    -- Quality and sync
-    measurement_quality VARCHAR(20) DEFAULT 'good',
-    impedance_values TEXT NULL,
-    synced_to_actiwell BOOLEAN DEFAULT FALSE,
-    sync_attempts INT DEFAULT 0,
-    last_sync_attempt DATETIME NULL,
-    sync_error_message TEXT NULL,
-    
-    -- Raw data
-    raw_data TEXT NULL,
-    processing_notes TEXT NULL,
-    
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    INDEX idx_customer_phone (customer_phone),
-    INDEX idx_device_id (device_id),
-    INDEX idx_measurement_time (measurement_timestamp),
-    INDEX idx_sync_status (synced_to_actiwell)
-) ENGINE=InnoDB;
+Lưu ý: Ứng dụng được thiết kế để tự động tạo các bảng cần thiết khi khởi động lần đầu, nhờ vào hàm _ensure_tables_exist() trong database_manager.py.
 
--- Device status table
-CREATE TABLE device_status (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    device_id VARCHAR(50) UNIQUE NOT NULL,
-    device_type VARCHAR(20) NOT NULL,
-    serial_port VARCHAR(50) NOT NULL,
-    connection_status VARCHAR(20) DEFAULT 'disconnected',
-    firmware_version VARCHAR(50) NULL,
-    last_heartbeat DATETIME NULL,
-    last_measurement DATETIME NULL,
-    total_measurements INT DEFAULT 0,
-    error_count INT DEFAULT 0,
-    configuration JSON NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
-
--- Customer mapping table
-CREATE TABLE customer_mapping (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    phone_number VARCHAR(20) UNIQUE NOT NULL,
-    actiwell_customer_id INT NOT NULL,
-    customer_name VARCHAR(255) NULL,
-    customer_email VARCHAR(255) NULL,
-    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    INDEX idx_phone (phone_number),
-    INDEX idx_actiwell_id (actiwell_customer_id)
-) ENGINE=InnoDB;
-
--- Insert test data
-INSERT INTO customer_mapping (phone_number, actiwell_customer_id, customer_name) VALUES 
-('0901234567', 1, 'Test Customer 1'),
-('0907654321', 2, 'Test Customer 2');
-```
-
-## 🐍 BƯỚC 4: SETUP PYTHON ENVIRONMENT
-
-### 4.1 Tạo virtual environment
-```bash
+🐍 BƯỚC 4: THIẾT LẬP MÔI TRƯỜNG PYTHON
+4.1. Tạo môi trường ảo (Virtual Environment)
+Generated bash
 cd /opt/actiwell
 
-# Tạo virtual environment
-python3 -m venv venv
+# Tạo môi trường ảo với quyền của user 'actiwell'
+sudo -u actiwell python3 -m venv venv
 
-# Activate environment
+# Kích hoạt môi trường ảo
 source venv/bin/activate
 
-# Upgrade pip
+# Nâng cấp pip và cài đặt các thư viện
 pip install --upgrade pip
-
-# Install dependencies
 pip install -r requirements.txt
-```
 
-### 4.2 Tạo __init__.py files
-```bash
-# Tạo __init__.py cho routes package
-touch routes/__init__.py
-```
+# Rời khỏi môi trường ảo
+deactivate
 
-## 🔌 BƯỚC 5: CẤU HÌNH USB DEVICES
+🔌 BƯỚC 5: CẤU HÌNH QUYỀN TRUY CẬP THIẾT BỊ USB
 
-### 5.1 USB permissions
-```bash
-# Add user to dialout group
+Bước này rất quan trọng để ứng dụng có thể đọc dữ liệu từ thiết bị Tanita/InBody.
+
+5.1. Cấp quyền truy cập cổng Serial
+Generated bash
+# Thêm user 'actiwell' vào nhóm 'dialout' để có quyền truy cập cổng serial
 sudo usermod -a -G dialout actiwell
 
-# Create udev rules
-sudo tee /etc/udev/rules.d/99-actiwell-devices.rules << 'EOF'
-# Tanita devices
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666", GROUP="dialout"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", MODE="0666", GROUP="dialout"
+5.2. Tạo quy tắc udev
 
-# InBody devices  
-SUBSYSTEM=="tty", ATTRS{interface}=="InBody*", MODE="0666", GROUP="dialout"
+Quy tắc này sẽ tự động cấp quyền cho các thiết bị khi được cắm vào.
 
-# Generic USB-to-Serial
-SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", MODE="0666", GROUP="dialout"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0666", GROUP="dialout"
+Generated bash
+sudo bash -c 'cat > /etc/udev/rules.d/99-actiwell-devices.rules' << 'EOF'
+# Grant members of the 'dialout' group access to USB-to-Serial devices
+SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", MODE="0666", GROUP="dialout"
 EOF
 
-# Reload udev rules
+# Tải lại và kích hoạt các quy tắc mới
 sudo udevadm control --reload-rules
 sudo udevadm trigger
-```
 
-## 🚀 BƯỚC 6: CHẠY HỆ THỐNG
+🚀 BƯỚC 6: CHẠY VÀ QUẢN LÝ ỨNG DỤNG
+6.1. Chạy thử nghiệm thủ công
 
-### 6.1 Test run
-```bash
+Trước khi tạo service, hãy chạy thử để đảm bảo mọi thứ hoạt động.
+
 cd /opt/actiwell
-source venv/bin/activate
 
-# Test database connection
-python3 -c "
-import mysql.connector
-conn = mysql.connector.connect(
-    host='localhost',
-    user='actiwell_user', 
-    password='actiwell_pass123',
-    database='actiwell_measurements'
-)
-print('✓ Database connection OK')
-conn.close()
-"
+# Chạy ứng dụng với quyền của user 'actiwell'
+sudo -u actiwell /opt/actiwell/venv/bin/python run.py
 
-# Test imports
-python3 -c "
-import flask
-import mysql.connector
-import serial
-print('✓ All imports OK')
-"
 
-# Run application
-python3 app.py
-```
+Bạn sẽ thấy log khởi động. Mở trình duyệt và truy cập http://<your-server-ip>:5000. Nếu thành công, nhấn Ctrl+C để dừng.
 
-**Expected output:**
-```
-INFO - Initializing Database Manager...
-INFO - Database Manager initialized successfully
-INFO - Initializing Device Manager...
-INFO - Device Manager initialized successfully
-INFO - Initializing Actiwell API...
-INFO - Actiwell API initialized successfully
-INFO - All managers initialized successfully
-INFO - Starting background services...
-INFO - Measurement processor service started
-INFO - Sync retry service started
-INFO - Started 2 background services
-INFO - Application startup completed successfully
-INFO - Connected devices: 0
-INFO - Server ready on 0.0.0.0:5000
- * Running on all addresses (0.0.0.0)
- * Running on http://127.0.0.1:5000
- * Running on http://[your-ip]:5000
-```
+6.2. Tạo systemd Service để chạy nền (Production)
+sudo nano /etc/systemd/system/actiwell-backend.service
 
-### 6.2 Tạo systemd service (Production)
-```bash
-# Tạo service file
-sudo tee /etc/systemd/system/actiwell-backend.service << 'EOF'
+
+
+Generated ini
 [Unit]
 Description=Actiwell Body Measurement Backend
-After=network.target mysql.service
-Wants=mysql.service
+After=network.target mariadb.service
+Wants=mariadb.service
 
 [Service]
 Type=simple
 User=actiwell
 Group=actiwell
 WorkingDirectory=/opt/actiwell
-Environment=PATH=/opt/actiwell/venv/bin
-ExecStart=/opt/actiwell/venv/bin/python app.py
+ExecStart=/opt/actiwell/venv/bin/python run.py
 Restart=on-failure
 RestartSec=5
+# Đảm bảo PYTHONPATH bao gồm thư mục làm việc để import 'config'
+Environment="PYTHONPATH=/opt/actiwell"
 
 [Install]
 WantedBy=multi-user.target
-EOF
 
-# Enable và start service
+
+Lưu file và quản lý service bằng các lệnh sau:
+
+Generated bash
+# Tải lại cấu hình systemd
 sudo systemctl daemon-reload
-sudo systemctl enable actiwell-backend
-sudo systemctl start actiwell-backend
 
-# Check status
-sudo systemctl status actiwell-backend
-```
+# Kích hoạt service để tự khởi động cùng hệ thống
+sudo systemctl enable actiwell-backend.service
 
-## 🌐 BƯỚC 7: TRUY CẬP HỆ THỐNG
+# Khởi động service ngay lập tức
+sudo systemctl start actiwell-backend.service
 
-### 7.1 Web Dashboard
-- **URL**: http://localhost:5000 hoặc http://[server-ip]:5000
-- **Login**: 
-  - Username: `admin`
-  - Password: `actiwell123`
+# Kiểm tra trạng thái service
+sudo systemctl status actiwell-backend.service
 
-### 7.2 API Endpoints
-```bash
-# Health check
-curl http://localhost:5000/api/health
+# Xem log của service
+sudo journalctl -u actiwell-backend.service -f
 
-# Login và get token
-curl -X POST http://localhost:5000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"actiwell123"}'
+🌐 BƯỚC 7: TRUY CẬP VÀ KIỂM TRA HỆ THỐNG
 
-# Get device status (with token)
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:5000/api/devices/status
+Dashboard: http://<your-server-ip>:5000
 
-# Get measurements
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:5000/api/measurements
-```
+Health Check: curl http://localhost:5000/api/health
 
-## 🔧 BƯỚC 8: CẤU HÌNH ACTIWELL API
+Đăng nhập (mặc định):
 
-### 8.1 Cập nhật .env file
-```bash
-# Edit .env file
-nano /opt/actiwell/.env
+Username: admin
 
-# Update these values:
-ACTIWELL_API_URL=https://your-actiwell-api-url.com
-ACTIWELL_API_KEY=your-actual-api-key
-ACTIWELL_LOCATION_ID=your-location-id
-```
+Password: actiwell123 (Nên thay đổi trong auth_routes.py cho môi trường production)
 
-### 8.2 Restart service
-```bash
-sudo systemctl restart actiwell-backend
-```
+🚨 TROUBLESHOOTING
 
-## 📊 BƯỚC 9: KIỂM TRA HOẠT ĐỘNG
+Lỗi "ImportError: No module named 'config'": Đảm bảo bạn đã thêm Environment="PYTHONPATH=/opt/actiwell" vào file service systemd hoặc chạy ứng dụng từ thư mục /opt/actiwell.
 
-### 9.1 Utility scripts
-```bash
-# Tạo script kiểm tra trạng thái
-cat > /opt/actiwell/check_status.sh << 'EOF'
-#!/bin/bash
-echo "=== ACTIWELL BACKEND STATUS ==="
-echo "Service Status:"
-sudo systemctl status actiwell-backend --no-pager -l
+Không kết nối được thiết bị:
 
-echo -e "\nDevice Ports:"
-ls -la /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "No USB devices found"
+Kiểm tra thiết bị có được nhận không: ls -l /dev/ttyUSB*
 
-echo -e "\nDatabase Status:"
-mysql -u actiwell_user -pactiwell_pass123 -e "SELECT COUNT(*) as total_measurements FROM actiwell_measurements.body_measurements;" 2>/dev/null || echo "Database connection failed"
+Kiểm tra quyền của user: groups actiwell (phải có dialout).
 
-echo -e "\nAPI Status:"
-curl -s http://localhost:5000/api/health | python3 -m json.tool 2>/dev/null || echo "API not responding"
+Service không khởi động: Kiểm tra log chi tiết: sudo journalctl -u actiwell-backend.service --no-pager.
 
-echo -e "\nLogs (last 10 lines):"
-sudo journalctl -u actiwell-backend -n 10 --no-pager
-EOF
-
-chmod +x /opt/actiwell/check_status.sh
-
-# Chạy kiểm tra
-/opt/actiwell/check_status.sh
-```
-
-### 9.2 Test với sample data
-```bash
-# Test measurement creation
-curl -X POST http://localhost:5000/api/measurements \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "device_id": "test_device",
-    "customer_phone": "0901234567",
-    "weight_kg": 70.5,
-    "body_fat_percent": 15.2,
-    "muscle_mass_kg": 55.3
-  }'
-```
-
-## 🚨 TROUBLESHOOTING
-
-### Common Issues:
-
-1. **Database connection failed**
-   ```bash
-   # Check MySQL service
-   sudo systemctl status mysql
-   
-   # Check credentials
-   mysql -u actiwell_user -pactiwell_pass123 -e "SELECT 1;"
-   ```
-
-2. **Device not detected**
-   ```bash
-   # Check USB devices
-   lsusb
-   ls -la /dev/ttyUSB*
-   
-   # Check permissions
-   groups actiwell
-   ```
-
-3. **Import errors**
-   ```bash
-   # Check virtual environment
-   source /opt/actiwell/venv/bin/activate
-   pip list
-   
-   # Reinstall if needed
-   pip install -r requirements.txt
-   ```
-
-4. **Service won't start**
-   ```bash
-   # Check logs
-   sudo journalctl -u actiwell-backend -f
-   
-   # Check file permissions
-   sudo chown -R actiwell:actiwell /opt/actiwell
-   ```
-
-## 🎯 NEXT STEPS
-
-1. **Kết nối thiết bị Tanita/InBody thực tế**
-2. **Cấu hình Actiwell API credentials**
-3. **Test measurement flow với thiết bị thật**
-4. **Setup monitoring và alerts**
-5. **Backup và disaster recovery**
-
----
-
-**🎉 Chúc mừng! Hệ thống Actiwell Backend đã sẵn sàng hoạt động!**
+🎉 Chúc mừng! Hệ thống Actiwell Backend của bạn đã sẵn sàng hoạt động!

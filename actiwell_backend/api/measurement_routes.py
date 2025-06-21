@@ -3,7 +3,7 @@
 # ====================================================================================
 
 from flask import Blueprint, request, jsonify
-from app import app_state, token_required
+from run import app_state, token_required
 import logging
 
 logger = logging.getLogger(__name__)
