@@ -1,969 +1,278 @@
-# Hướng dẫn cài đặt Body Composition Gateway trên Raspberry Pi
+# ACTIWELL BACKEND - HƯỚNG DẪN SETUP VÀ CHẠY HỆ THỐNG
 
-## Bước 1: Chuẩn bị Raspberry Pi
+## 📋 BƯỚC 1: CHUẨN BỊ MÔI TRƯỜNG
 
-### 1.1 Yêu cầu hệ thống
-- Raspberry Pi 3B+ hoặc mới hơn
-- MicroSD card 32GB (Class 10)
-- Raspberry Pi OS (64-bit recommended)
-- Kết nối internet
-
-### 1.2 Cài đặt Raspberry Pi OS
+### 1.1 Tạo cấu trúc thư mục
 ```bash
-# Cập nhật hệ thống
-sudo apt update && sudo apt upgrade -y
+# Tạo thư mục project
+sudo mkdir -p /opt/actiwell
+cd /opt/actiwell
 
-# Cài đặt các gói cần thiết
-sudo apt install -y git curl wget nano htop
-```
-
-## Bước 2: Cài đặt MySQL Server
-
-### 2.1 Cài đặt MySQL
-```bash
-# Cài đặt MySQL Server
-sudo apt install -y mysql-server
-
-# Khởi động và enable MySQL
-sudo systemctl start mysql
-sudo systemctl enable mysql
-
-# Kiểm tra trạng thái
-sudo systemctl status mysql
-```
-
-### 2.2 Bảo mật MySQL
-```bash
-# Chạy script bảo mật MySQL
-sudo mysql_secure_installation
-
-# Trả lời các câu hỏi:
-# - Set root password: Y (đặt mật khẩu mạnh)
-# - Remove anonymous users: Y
-# - Disallow root login remotely: Y
-# - Remove test database: Y
-# - Reload privilege tables: Y
-```
-
-### 2.3 Tạo database và user cho ứng dụng
-```bash
-# Đăng nhập MySQL với quyền root
-sudo mysql -u root -p
-
-# Tạo database
-CREATE DATABASE body_composition_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+# Tạo các thư mục con
+sudo mkdir -p {templates,static,routes,logs,data}
 
 # Tạo user cho ứng dụng
-CREATE USER 'body_comp_user'@'localhost' IDENTIFIED BY 'your_secure_password';
-
-# Cấp quyền
-GRANT ALL PRIVILEGES ON body_composition_db.* TO 'body_comp_user'@'localhost';
-FLUSH PRIVILEGES;
-
-# Thoát MySQL
-EXIT;
+sudo useradd -r -s /bin/bash -d /opt/actiwell actiwell
+sudo chown -R actiwell:actiwell /opt/actiwell
 ```
 
-### 2.4 Tối ưu MySQL cho Raspberry Pi
+### 1.2 Cài đặt dependencies
 ```bash
-# Chỉnh sửa cấu hình MySQL
-sudo nano /etc/mysql/mysql.conf.d/mysqld.cnf
+# Cập nhật system
+sudo apt update && sudo apt upgrade -y
 
-# Thêm các dòng sau vào cuối file:
-[mysqld]
-# Tối ưu cho Raspberry Pi
-innodb_buffer_pool_size = 128M
-innodb_log_file_size = 32M
-max_connections = 50
-query_cache_type = 1
-query_cache_size = 16M
-tmp_table_size = 16M
-max_heap_table_size = 16M
+# Cài đặt Python và MySQL
+sudo apt install -y python3 python3-pip python3-venv mysql-server
 
-# Khởi động lại MySQL
-sudo systemctl restart mysql
+# Cài đặt USB và serial support
+sudo apt install -y usbutils setserial
 ```
 
-## Bước 3: Cài đặt Python Environment
+## 📁 BƯỚC 2: TẠO CÁC FILE CẦN THIẾT
 
-### 3.1 Cài đặt Python và pip
-```bash
-# Cài đặt Python 3 và các gói liên quan
-sudo apt install -y python3 python3-pip python3-venv python3-dev
-
-# Cài đặt các thư viện hệ thống cần thiết
-sudo apt install -y build-essential libssl-dev libffi-dev libjpeg-dev libpng-dev
+### 2.1 File cấu trúc
+```
+/opt/actiwell/
+├── app.py                    # Main Flask application
+├── config.py                 # Configuration
+├── models.py                 # Data models
+├── database_manager.py       # Database operations
+├── device_manager.py         # Device communication
+├── actiwell_api.py          # Actiwell API integration
+├── requirements.txt          # Python dependencies
+├── .env                     # Environment variables
+├── routes/
+│   ├── __init__.py
+│   ├── device_routes.py
+│   ├── measurement_routes.py
+│   └── sync_routes.py
+├── templates/
+│   ├── dashboard.html
+│   ├── error.html
+│   └── initializing.html
+├── static/                  # CSS, JS files
+├── logs/                    # Application logs
+└── data/                    # Raw measurement data
 ```
 
-### 3.2 Tạo thư mục ứng dụng
+### 2.2 Tạo requirements.txt
 ```bash
-# Tạo thư mục cho ứng dụng
-sudo mkdir -p /opt/body-composition-gateway
-sudo chown pi:pi /opt/body-composition-gateway
-cd /opt/body-composition-gateway
-
-# Tạo virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Cài đặt các package Python cần thiết
-pip install --upgrade pip setuptools wheel
-```
-
-### 3.3 Cài đặt các thư viện Python
-```bash
-# Tạo file requirements.txt
-cat > requirements.txt << 'EOF'
+cat > /opt/actiwell/requirements.txt << 'EOF'
 Flask==2.3.3
 Flask-CORS==4.0.0
-Flask-SocketIO==5.3.6
 mysql-connector-python==8.1.0
 pyserial==3.5
 requests==2.31.0
-PyYAML==6.0.1
-python-socketio==5.8.0
-eventlet==0.33.3
-psutil==5.9.5
-schedule==1.2.0
+PyJWT==2.8.0
 python-dotenv==1.0.0
+psutil==5.9.5
 EOF
+```
 
-# Cài đặt các package
+### 2.3 Tạo .env configuration
+```bash
+cat > /opt/actiwell/.env << 'EOF'
+# Database Configuration
+DB_HOST=localhost
+DB_USER=actiwell_user
+DB_PASSWORD=actiwell_pass123
+DB_NAME=actiwell_measurements
+DB_POOL_SIZE=5
+
+# Actiwell API Configuration (UPDATE THESE VALUES)
+ACTIWELL_API_URL=https://api.actiwell.com
+ACTIWELL_API_KEY=your_api_key_here
+ACTIWELL_LOCATION_ID=1
+
+# Application Configuration
+SECRET_KEY=actiwell-secret-key-2024-change-this-in-production
+JWT_EXPIRE_HOURS=24
+WEB_PORT=5000
+WEB_HOST=0.0.0.0
+FLASK_DEBUG=False
+
+# Device Configuration
+TANITA_BAUDRATE=9600
+INBODY_BAUDRATE=9600
+DEVICE_TIMEOUT=5
+AUTO_DETECT_DEVICES=True
+
+# Storage Paths
+DATA_STORAGE_PATH=/opt/actiwell/data
+LOG_STORAGE_PATH=/opt/actiwell/logs
+EOF
+```
+
+### 2.4 Copy source code files
+
+- `app.py` - Flask Application Core
+- `config.py` - Configuration
+- `models.py` - Data Models
+- `database_manager.py` - Database Manager
+- `device_manager.py` - Device Manager
+- `actiwell_api.py` - Actiwell API Integration
+- `routes/*.py` - API Routes
+
+## 🗄️ BƯỚC 3: SETUP DATABASE
+
+### 3.1 Cấu hình MySQL
+```bash
+# Secure MySQL installation
+sudo mysql_secure_installation
+
+# Tạo database và user
+sudo mysql -u root -p << 'EOF'
+CREATE DATABASE actiwell_measurements CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'actiwell_user'@'localhost' IDENTIFIED BY 'actiwell_pass123';
+GRANT ALL PRIVILEGES ON actiwell_measurements.* TO 'actiwell_user'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+EOF
+```
+
+### 3.2 Tạo database schema
+```sql
+-- Chạy script này để tạo tables
+USE actiwell_measurements;
+
+-- Body measurements table
+CREATE TABLE body_measurements (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    measurement_uuid VARCHAR(36) UNIQUE NOT NULL,
+    device_id VARCHAR(50) NOT NULL,
+    device_type VARCHAR(20) NOT NULL,
+    customer_phone VARCHAR(20) NOT NULL,
+    customer_id INT NULL,
+    measurement_timestamp DATETIME NOT NULL,
+    
+    -- Basic measurements
+    weight_kg DECIMAL(5,2) NULL,
+    height_cm DECIMAL(5,2) NULL,
+    bmi DECIMAL(5,2) NULL,
+    
+    -- Body composition
+    body_fat_percent DECIMAL(5,2) NULL,
+    muscle_mass_kg DECIMAL(5,2) NULL,
+    bone_mass_kg DECIMAL(5,2) NULL,
+    total_body_water_percent DECIMAL(5,2) NULL,
+    protein_percent DECIMAL(5,2) NULL,
+    mineral_percent DECIMAL(5,2) NULL,
+    
+    -- Advanced metrics
+    visceral_fat_rating INT NULL,
+    subcutaneous_fat_percent DECIMAL(5,2) NULL,
+    skeletal_muscle_mass_kg DECIMAL(5,2) NULL,
+    
+    -- Metabolic data
+    bmr_kcal INT NULL,
+    metabolic_age INT NULL,
+    
+    -- Segmental analysis
+    right_arm_muscle_kg DECIMAL(5,2) NULL,
+    left_arm_muscle_kg DECIMAL(5,2) NULL,
+    trunk_muscle_kg DECIMAL(5,2) NULL,
+    right_leg_muscle_kg DECIMAL(5,2) NULL,
+    left_leg_muscle_kg DECIMAL(5,2) NULL,
+    
+    -- Quality and sync
+    measurement_quality VARCHAR(20) DEFAULT 'good',
+    impedance_values TEXT NULL,
+    synced_to_actiwell BOOLEAN DEFAULT FALSE,
+    sync_attempts INT DEFAULT 0,
+    last_sync_attempt DATETIME NULL,
+    sync_error_message TEXT NULL,
+    
+    -- Raw data
+    raw_data TEXT NULL,
+    processing_notes TEXT NULL,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    INDEX idx_customer_phone (customer_phone),
+    INDEX idx_device_id (device_id),
+    INDEX idx_measurement_time (measurement_timestamp),
+    INDEX idx_sync_status (synced_to_actiwell)
+) ENGINE=InnoDB;
+
+-- Device status table
+CREATE TABLE device_status (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    device_id VARCHAR(50) UNIQUE NOT NULL,
+    device_type VARCHAR(20) NOT NULL,
+    serial_port VARCHAR(50) NOT NULL,
+    connection_status VARCHAR(20) DEFAULT 'disconnected',
+    firmware_version VARCHAR(50) NULL,
+    last_heartbeat DATETIME NULL,
+    last_measurement DATETIME NULL,
+    total_measurements INT DEFAULT 0,
+    error_count INT DEFAULT 0,
+    configuration JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Customer mapping table
+CREATE TABLE customer_mapping (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    phone_number VARCHAR(20) UNIQUE NOT NULL,
+    actiwell_customer_id INT NOT NULL,
+    customer_name VARCHAR(255) NULL,
+    customer_email VARCHAR(255) NULL,
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    INDEX idx_phone (phone_number),
+    INDEX idx_actiwell_id (actiwell_customer_id)
+) ENGINE=InnoDB;
+
+-- Insert test data
+INSERT INTO customer_mapping (phone_number, actiwell_customer_id, customer_name) VALUES 
+('0901234567', 1, 'Test Customer 1'),
+('0907654321', 2, 'Test Customer 2');
+```
+
+## 🐍 BƯỚC 4: SETUP PYTHON ENVIRONMENT
+
+### 4.1 Tạo virtual environment
+```bash
+cd /opt/actiwell
+
+# Tạo virtual environment
+python3 -m venv venv
+
+# Activate environment
+source venv/bin/activate
+
+# Upgrade pip
+pip install --upgrade pip
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Bước 4: Tạo ứng dụng Web Server
-
-### 4.1 Tạo file cấu hình
+### 4.2 Tạo __init__.py files
 ```bash
-# Tạo file cấu hình
-cat > config.yaml << 'EOF'
-database:
-  host: "localhost"
-  port: 3306
-  username: "body_comp_user"
-  password: "your_secure_password"
-  database: "body_composition_db"
-
-web:
-  host: "0.0.0.0"
-  port: 5000
-  debug: false
-
-device:
-  auto_detect: true
-  scan_ports: ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"]
-  baudrate: 9600
-
-actiwell:
-  api_url: ""
-  api_key: ""
-  location_id: ""
-EOF
+# Tạo __init__.py cho routes package
+touch routes/__init__.py
 ```
 
-### 4.2 Tạo ứng dụng chính
+## 🔌 BƯỚC 5: CẤU HÌNH USB DEVICES
+
+### 5.1 USB permissions
 ```bash
-# Tạo file app.py
-cat > app.py << 'EOF'
-#!/usr/bin/env python3
-"""
-Body Composition Gateway - Main Application
-"""
+# Add user to dialout group
+sudo usermod -a -G dialout actiwell
 
-from flask import Flask, render_template, jsonify, request
-from flask_cors import CORS
-from flask_socketio import SocketIO, emit
-import mysql.connector
-import yaml
-import serial
-import threading
-import time
-import json
-import psutil
-from datetime import datetime
-import glob
-import os
+# Create udev rules
+sudo tee /etc/udev/rules.d/99-actiwell-devices.rules << 'EOF'
+# Tanita devices
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", MODE="0666", GROUP="dialout"
 
-# Load configuration
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+# InBody devices  
+SUBSYSTEM=="tty", ATTRS{interface}=="InBody*", MODE="0666", GROUP="dialout"
 
-# Initialize Flask app
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'body-composition-secret-key'
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-# Database connection
-def get_db_connection():
-    return mysql.connector.connect(
-        host=config['database']['host'],
-        user=config['database']['username'],
-        password=config['database']['password'],
-        database=config['database']['database'],
-        charset='utf8mb4'
-    )
-
-# Device management
-class DeviceManager:
-    def __init__(self):
-        self.devices = {}
-        self.connected_devices = []
-        self.monitoring = False
-        
-    def scan_devices(self):
-        """Scan for connected devices"""
-        devices = []
-        for port_pattern in config['device']['scan_ports']:
-            for port in glob.glob(port_pattern):
-                try:
-                    ser = serial.Serial(port, config['device']['baudrate'], timeout=1)
-                    devices.append({
-                        'port': port,
-                        'status': 'connected',
-                        'type': 'tanita'
-                    })
-                    ser.close()
-                except:
-                    devices.append({
-                        'port': port,
-                        'status': 'error',
-                        'type': 'unknown'
-                    })
-        return devices
-    
-    def start_monitoring(self):
-        """Start device monitoring"""
-        self.monitoring = True
-        monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        monitor_thread.start()
-    
-    def _monitor_loop(self):
-        """Device monitoring loop"""
-        while self.monitoring:
-            self.connected_devices = self.scan_devices()
-            socketio.emit('device_status', {
-                'devices': self.connected_devices,
-                'timestamp': datetime.now().isoformat()
-            })
-            time.sleep(5)  # Scan every 5 seconds
-
-# Initialize device manager
-device_manager = DeviceManager()
-
-# Web routes
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/api/system/status')
-def system_status():
-    """Get system status"""
-    # Get system metrics
-    cpu_percent = psutil.cpu_percent(interval=1)
-    memory = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
-    
-    # Test database connection
-    db_status = 'disconnected'
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        cursor.fetchone()
-        cursor.close()
-        conn.close()
-        db_status = 'connected'
-    except:
-        pass
-    
-    return jsonify({
-        'system': {
-            'cpu_percent': cpu_percent,
-            'memory_percent': memory.percent,
-            'memory_available_gb': round(memory.available / (1024**3), 2),
-            'disk_percent': round((disk.used / disk.total) * 100, 1),
-            'disk_free_gb': round(disk.free / (1024**3), 2)
-        },
-        'database': {
-            'status': db_status
-        },
-        'devices': device_manager.connected_devices,
-        'timestamp': datetime.now().isoformat()
-    })
-
-@app.route('/api/devices/scan')
-def scan_devices():
-    """Scan for devices"""
-    devices = device_manager.scan_devices()
-    return jsonify({
-        'devices': devices,
-        'count': len(devices)
-    })
-
-@app.route('/api/measurements/latest')
-def latest_measurements():
-    """Get latest measurements"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        cursor.execute("""
-            SELECT * FROM tanita_measurements 
-            ORDER BY created_at DESC 
-            LIMIT 10
-        """)
-        
-        measurements = cursor.fetchall()
-        
-        # Convert datetime objects to strings
-        for measurement in measurements:
-            for key, value in measurement.items():
-                if isinstance(value, datetime):
-                    measurement[key] = value.isoformat()
-        
-        cursor.close()
-        conn.close()
-        
-        return jsonify({
-            'measurements': measurements,
-            'count': len(measurements)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# WebSocket events
-@socketio.on('connect')
-def handle_connect():
-    emit('status', {'message': 'Connected to Body Composition Gateway'})
-
-@socketio.on('request_status')
-def handle_status_request():
-    # Send current system status
-    emit('system_status', {
-        'devices': device_manager.connected_devices,
-        'timestamp': datetime.now().isoformat()
-    })
-
-if __name__ == '__main__':
-    # Create database tables if they don't exist
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Create measurements table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tanita_measurements (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                customer_id VARCHAR(50),
-                extracted_phone_number VARCHAR(15),
-                device_id VARCHAR(50),
-                weight_kg DECIMAL(5,1),
-                bmi DECIMAL(4,1),
-                body_fat_percent DECIMAL(4,1),
-                muscle_mass_kg DECIMAL(5,1),
-                bone_mass_kg DECIMAL(4,1),
-                visceral_fat_rating SMALLINT,
-                metabolic_age SMALLINT,
-                bmr_kcal SMALLINT,
-                raw_data TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_phone (extracted_phone_number),
-                INDEX idx_created (created_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """)
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print("Database tables created successfully")
-    except Exception as e:
-        print(f"Database setup error: {e}")
-    
-    # Start device monitoring
-    device_manager.start_monitoring()
-    
-    # Start web application
-    print(f"Starting Body Composition Gateway on port {config['web']['port']}")
-    socketio.run(app, 
-                host=config['web']['host'], 
-                port=config['web']['port'], 
-                debug=config['web']['debug'])
-EOF
-
-chmod +x app.py
-```
-
-### 4.3 Tạo templates HTML
-```bash
-# Tạo thư mục templates
-mkdir -p templates
-
-# Tạo file index.html
-cat > templates/index.html << 'EOF'
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Body Composition Gateway</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #333;
-            min-height: 100vh;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
-        .header {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
-        }
-        
-        .header h1 {
-            color: #2c3e50;
-            text-align: center;
-            margin-bottom: 10px;
-        }
-        
-        .status-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .status-card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
-        }
-        
-        .status-card h3 {
-            color: #2c3e50;
-            margin-bottom: 15px;
-            border-bottom: 2px solid #3498db;
-            padding-bottom: 5px;
-        }
-        
-        .metric {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-            padding: 8px;
-            background: rgba(52, 152, 219, 0.1);
-            border-radius: 5px;
-        }
-        
-        .metric-label {
-            font-weight: 500;
-        }
-        
-        .metric-value {
-            font-weight: bold;
-            color: #2c3e50;
-        }
-        
-        .status-indicator {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        .status-connected {
-            background: rgba(46, 204, 113, 0.2);
-            color: #27ae60;
-        }
-        
-        .status-disconnected {
-            background: rgba(231, 76, 60, 0.2);
-            color: #e74c3c;
-        }
-        
-        .status-error {
-            background: rgba(230, 126, 34, 0.2);
-            color: #e67e22;
-        }
-        
-        .device-list {
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        
-        .device-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px;
-            margin-bottom: 8px;
-            background: rgba(52, 152, 219, 0.1);
-            border-radius: 8px;
-        }
-        
-        .btn {
-            background: #3498db;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: background 0.3s;
-        }
-        
-        .btn:hover {
-            background: #2980b9;
-        }
-        
-        .btn:disabled {
-            background: #bdc3c7;
-            cursor: not-allowed;
-        }
-        
-        .measurements-table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        
-        .measurements-table th,
-        .measurements-table td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #ecf0f1;
-        }
-        
-        .measurements-table th {
-            background: #3498db;
-            color: white;
-            font-weight: 600;
-        }
-        
-        .measurements-table tr:hover {
-            background: rgba(52, 152, 219, 0.1);
-        }
-        
-        .real-time-indicator {
-            position: relative;
-        }
-        
-        .real-time-indicator::before {
-            content: '';
-            position: absolute;
-            top: -2px;
-            right: -2px;
-            width: 8px;
-            height: 8px;
-            background: #2ecc71;
-            border-radius: 50%;
-            animation: pulse 2s infinite;
-        }
-        
-        @keyframes pulse {
-            0% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.2); opacity: 0.7; }
-            100% { transform: scale(1); opacity: 1; }
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #7f8c8d;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🏥 Body Composition Gateway</h1>
-            <p style="text-align: center; color: #7f8c8d; margin-top: 5px;">
-                Real-time monitoring system for Tanita MC-780MA devices
-            </p>
-        </div>
-        
-        <div class="status-grid">
-            <!-- System Status -->
-            <div class="status-card">
-                <h3>🖥️ System Status</h3>
-                <div class="metric">
-                    <span class="metric-label">CPU Usage:</span>
-                    <span class="metric-value" id="cpu-usage">Loading...</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Memory Usage:</span>
-                    <span class="metric-value" id="memory-usage">Loading...</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Disk Usage:</span>
-                    <span class="metric-value" id="disk-usage">Loading...</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Last Update:</span>
-                    <span class="metric-value" id="last-update">Loading...</span>
-                </div>
-            </div>
-            
-            <!-- Database Status -->
-            <div class="status-card">
-                <h3>🗄️ Database Status</h3>
-                <div class="metric">
-                    <span class="metric-label">Connection:</span>
-                    <span class="status-indicator" id="db-status">
-                        <span class="status-dot"></span>
-                        Loading...
-                    </span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Server:</span>
-                    <span class="metric-value">MySQL</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Database:</span>
-                    <span class="metric-value">body_composition_db</span>
-                </div>
-            </div>
-            
-            <!-- Device Status -->
-            <div class="status-card">
-                <h3 class="real-time-indicator">📱 Connected Devices</h3>
-                <div id="device-list" class="device-list">
-                    <div class="loading">Scanning devices...</div>
-                </div>
-                <button class="btn" onclick="scanDevices()" id="scan-btn">
-                    🔍 Scan Devices
-                </button>
-            </div>
-            
-            <!-- Connection Status -->
-            <div class="status-card">
-                <h3>🌐 Connection Status</h3>
-                <div class="metric">
-                    <span class="metric-label">WebSocket:</span>
-                    <span class="status-indicator" id="websocket-status">
-                        <span class="status-dot"></span>
-                        Connecting...
-                    </span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">API Status:</span>
-                    <span class="status-indicator" id="api-status">
-                        <span class="status-dot"></span>
-                        Checking...
-                    </span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Actiwell Sync:</span>
-                    <span class="status-indicator" id="actiwell-status">
-                        <span class="status-dot"></span>
-                        Not configured
-                    </span>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Latest Measurements -->
-        <div class="status-card">
-            <h3>📊 Latest Measurements</h3>
-            <div id="measurements-container">
-                <div class="loading">Loading measurements...</div>
-            </div>
-            <button class="btn" onclick="loadMeasurements()" style="margin-top: 15px;">
-                🔄 Refresh Measurements
-            </button>
-        </div>
-    </div>
-
-    <!-- Socket.IO -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
-    
-    <script>
-        // Initialize Socket.IO
-        const socket = io();
-        let systemData = {};
-        
-        // Socket event handlers
-        socket.on('connect', function() {
-            console.log('Connected to server');
-            updateWebSocketStatus('connected');
-            socket.emit('request_status');
-        });
-        
-        socket.on('disconnect', function() {
-            console.log('Disconnected from server');
-            updateWebSocketStatus('disconnected');
-        });
-        
-        socket.on('system_status', function(data) {
-            console.log('Received system status:', data);
-            updateSystemStatus(data);
-        });
-        
-        socket.on('device_status', function(data) {
-            console.log('Received device status:', data);
-            updateDeviceStatus(data.devices);
-        });
-        
-        // Update functions
-        function updateWebSocketStatus(status) {
-            const element = document.getElementById('websocket-status');
-            if (status === 'connected') {
-                element.className = 'status-indicator status-connected';
-                element.innerHTML = '<span class="status-dot"></span>Connected';
-            } else {
-                element.className = 'status-indicator status-disconnected';
-                element.innerHTML = '<span class="status-dot"></span>Disconnected';
-            }
-        }
-        
-        function updateSystemStatus(data) {
-            systemData = data;
-            
-            // Update system metrics
-            if (data.system) {
-                document.getElementById('cpu-usage').textContent = data.system.cpu_percent + '%';
-                document.getElementById('memory-usage').textContent = data.system.memory_percent + '%';
-                document.getElementById('disk-usage').textContent = data.system.disk_percent + '%';
-            }
-            
-            // Update database status
-            if (data.database) {
-                const dbElement = document.getElementById('db-status');
-                if (data.database.status === 'connected') {
-                    dbElement.className = 'status-indicator status-connected';
-                    dbElement.innerHTML = '<span class="status-dot"></span>Connected';
-                } else {
-                    dbElement.className = 'status-indicator status-disconnected';
-                    dbElement.innerHTML = '<span class="status-dot"></span>Disconnected';
-                }
-            }
-            
-            // Update devices
-            if (data.devices) {
-                updateDeviceStatus(data.devices);
-            }
-            
-            // Update timestamp
-            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
-        }
-        
-        function updateDeviceStatus(devices) {
-            const container = document.getElementById('device-list');
-            
-            if (!devices || devices.length === 0) {
-                container.innerHTML = '<div class="loading">No devices found</div>';
-                return;
-            }
-            
-            let html = '';
-            devices.forEach(device => {
-                const statusClass = device.status === 'connected' ? 'status-connected' : 
-                                  device.status === 'error' ? 'status-error' : 'status-disconnected';
-                
-                html += `
-                    <div class="device-item">
-                        <div>
-                            <strong>${device.port}</strong><br>
-                            <small>Type: ${device.type}</small>
-                        </div>
-                        <span class="status-indicator ${statusClass}">
-                            <span class="status-dot"></span>
-                            ${device.status}
-                        </span>
-                    </div>
-                `;
-            });
-            
-            container.innerHTML = html;
-        }
-        
-        // API functions
-        async function loadSystemStatus() {
-            try {
-                const response = await fetch('/api/system/status');
-                const data = await response.json();
-                updateSystemStatus(data);
-                
-                // Update API status
-                const apiElement = document.getElementById('api-status');
-                apiElement.className = 'status-indicator status-connected';
-                apiElement.innerHTML = '<span class="status-dot"></span>Online';
-            } catch (error) {
-                console.error('Error loading system status:', error);
-                const apiElement = document.getElementById('api-status');
-                apiElement.className = 'status-indicator status-error';
-                apiElement.innerHTML = '<span class="status-dot"></span>Error';
-            }
-        }
-        
-        async function scanDevices() {
-            const btn = document.getElementById('scan-btn');
-            btn.disabled = true;
-            btn.textContent = '🔍 Scanning...';
-            
-            try {
-                const response = await fetch('/api/devices/scan');
-                const data = await response.json();
-                updateDeviceStatus(data.devices);
-            } catch (error) {
-                console.error('Error scanning devices:', error);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '🔍 Scan Devices';
-            }
-        }
-        
-        async function loadMeasurements() {
-            const container = document.getElementById('measurements-container');
-            container.innerHTML = '<div class="loading">Loading measurements...</div>';
-            
-            try {
-                const response = await fetch('/api/measurements/latest');
-                const data = await response.json();
-                
-                if (data.measurements && data.measurements.length > 0) {
-                    let html = `
-                        <table class="measurements-table">
-                            <thead>
-                                <tr>
-                                    <th>Time</th>
-                                    <th>Phone</th>
-                                    <th>Weight (kg)</th>
-                                    <th>BMI</th>
-                                    <th>Body Fat (%)</th>
-                                    <th>Muscle Mass (kg)</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                    `;
-                    
-                    data.measurements.forEach(m => {
-                        const time = new Date(m.created_at).toLocaleString();
-                        html += `
-                            <tr>
-                                <td>${time}</td>
-                                <td>${m.extracted_phone_number || 'N/A'}</td>
-                                <td>${m.weight_kg || 'N/A'}</td>
-                                <td>${m.bmi || 'N/A'}</td>
-                                <td>${m.body_fat_percent || 'N/A'}</td>
-                                <td>${m.muscle_mass_kg || 'N/A'}</td>
-                            </tr>
-                        `;
-                    });
-                    
-                    html += '</tbody></table>';
-                    container.innerHTML = html;
-                } else {
-                    container.innerHTML = '<div class="loading">No measurements found</div>';
-                }
-            } catch (error) {
-                console.error('Error loading measurements:', error);
-                container.innerHTML = '<div class="loading">Error loading measurements</div>';
-            }
-        }
-        
-        // Initialize page
-        document.addEventListener('DOMContentLoaded', function() {
-            loadSystemStatus();
-            loadMeasurements();
-            
-            // Auto-refresh every 30 seconds
-            setInterval(loadSystemStatus, 30000);
-            setInterval(loadMeasurements, 60000);
-        });
-    </script>
-</body>
-</html>
-EOF
-```
-
-## Bước 5: Tạo Service để chạy tự động
-
-### 5.1 Tạo systemd service
-```bash
-# Tạo service file
-sudo cat > /etc/systemd/system/body-composition-gateway.service << 'EOF'
-[Unit]
-Description=Body Composition Gateway Service
-After=network.target mysql.service
-Wants=mysql.service
-
-[Service]
-Type=simple
-User=pi
-Group=pi
-WorkingDirectory=/opt/body-composition-gateway
-Environment=PATH=/opt/body-composition-gateway/venv/bin
-ExecStart=/opt/body-composition-gateway/venv/bin/python app.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Reload systemd và enable service
-sudo systemctl daemon-reload
-sudo systemctl enable body-composition-gateway
-```
-
-### 5.2 Khởi động service
-```bash
-# Khởi động service
-sudo systemctl start body-composition-gateway
-
-# Kiểm tra trạng thái
-sudo systemctl status body-composition-gateway
-
-# Xem logs
-sudo journalctl -u body-composition-gateway -f
-```
-
-## Bước 6: Cấu hình USB permissions cho Tanita
-
-### 6.1 Thêm user vào group dialout
-```bash
-# Thêm user pi vào group dialout
-sudo usermod -a -G dialout pi
-
-# Kiểm tra group membership
-groups pi
-```
-
-### 6.2 Tạo udev rules cho Tanita device
-```bash
-# Tạo udev rules
-sudo cat > /etc/udev/rules.d/99-tanita-devices.rules << 'EOF'
-# Tanita MC-780MA (FTDI USB-to-Serial)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666", GROUP="dialout", SYMLINK+="tanita%n"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", MODE="0666", GROUP="dialout", SYMLINK+="tanita%n"
-
-# Generic USB-to-Serial adapters
+# Generic USB-to-Serial
 SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", MODE="0666", GROUP="dialout"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0666", GROUP="dialout"
 EOF
@@ -973,92 +282,231 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-## Bước 7: Kiểm tra và test hệ thống
+## 🚀 BƯỚC 6: CHẠY HỆ THỐNG
 
-### 7.1 Kiểm tra MySQL
+### 6.1 Test run
 ```bash
-# Test kết nối MySQL
-mysql -u body_comp_user -p body_composition_db -e "SELECT 1;"
-```
-
-### 7.2 Kiểm tra web server
-```bash
-# Kiểm tra port có được mở không
-sudo netstat -tlnp | grep :5000
-
-# Test API
-curl http://localhost:5000/api/system/status
-```
-
-### 7.3 Kiểm tra USB devices
-```bash
-# Liệt kê USB devices
-lsusb
-
-# Kiểm tra serial ports
-ls -la /dev/ttyUSB* /dev/ttyACM*
-
-# Test quyền truy cập
-python3 -c "import serial; print('Serial access OK')"
-```
-
-## Bước 8: Truy cập Web Interface
-
-### 8.1 Mở web browser
-Truy cập: `http://[IP_của_Raspberry_Pi]:5000`
-
-Để tìm IP của Raspberry Pi:
-```bash
-hostname -I
-```
-
-### 8.2 Kiểm tra các chức năng
-- ✅ System Status hiển thị CPU, Memory, Disk usage
-- ✅ Database Status hiển thị "Connected"
-- ✅ Device Status hiển thị các USB devices
-- ✅ WebSocket Status hiển thị "Connected"
-- ✅ Latest Measurements (sẽ empty ban đầu)
-
-## Bước 9: Troubleshooting
-
-### 9.1 Nếu service không start
-```bash
-# Xem logs chi tiết
-sudo journalctl -u body-composition-gateway -n 50
-
-# Kiểm tra Python environment
-cd /opt/body-composition-gateway
+cd /opt/actiwell
 source venv/bin/activate
-python app.py
+
+# Test database connection
+python3 -c "
+import mysql.connector
+conn = mysql.connector.connect(
+    host='localhost',
+    user='actiwell_user', 
+    password='actiwell_pass123',
+    database='actiwell_measurements'
+)
+print('✓ Database connection OK')
+conn.close()
+"
+
+# Test imports
+python3 -c "
+import flask
+import mysql.connector
+import serial
+print('✓ All imports OK')
+"
+
+# Run application
+python3 app.py
 ```
 
-### 9.2 Nếu không kết nối được database
+**Expected output:**
+```
+INFO - Initializing Database Manager...
+INFO - Database Manager initialized successfully
+INFO - Initializing Device Manager...
+INFO - Device Manager initialized successfully
+INFO - Initializing Actiwell API...
+INFO - Actiwell API initialized successfully
+INFO - All managers initialized successfully
+INFO - Starting background services...
+INFO - Measurement processor service started
+INFO - Sync retry service started
+INFO - Started 2 background services
+INFO - Application startup completed successfully
+INFO - Connected devices: 0
+INFO - Server ready on 0.0.0.0:5000
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://[your-ip]:5000
+```
+
+### 6.2 Tạo systemd service (Production)
 ```bash
-# Kiểm tra MySQL service
-sudo systemctl status mysql
+# Tạo service file
+sudo tee /etc/systemd/system/actiwell-backend.service << 'EOF'
+[Unit]
+Description=Actiwell Body Measurement Backend
+After=network.target mysql.service
+Wants=mysql.service
 
-# Test kết nối thủ công
-mysql -u body_comp_user -p
+[Service]
+Type=simple
+User=actiwell
+Group=actiwell
+WorkingDirectory=/opt/actiwell
+Environment=PATH=/opt/actiwell/venv/bin
+ExecStart=/opt/actiwell/venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable và start service
+sudo systemctl daemon-reload
+sudo systemctl enable actiwell-backend
+sudo systemctl start actiwell-backend
+
+# Check status
+sudo systemctl status actiwell-backend
 ```
 
-### 9.3 Nếu không detect được USB device
+## 🌐 BƯỚC 7: TRUY CẬP HỆ THỐNG
+
+### 7.1 Web Dashboard
+- **URL**: http://localhost:5000 hoặc http://[server-ip]:5000
+- **Login**: 
+  - Username: `admin`
+  - Password: `actiwell123`
+
+### 7.2 API Endpoints
 ```bash
-# Kiểm tra USB device có được nhận diện không
-dmesg | grep ttyUSB
+# Health check
+curl http://localhost:5000/api/health
 
-# Kiểm tra quyền
-ls -la /dev/ttyUSB*
+# Login và get token
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"actiwell123"}'
+
+# Get device status (with token)
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  http://localhost:5000/api/devices/status
+
+# Get measurements
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  http://localhost:5000/api/measurements
 ```
 
-## Bước 10: Cấu hình auto-start khi boot
+## 🔧 BƯỚC 8: CẤU HÌNH ACTIWELL API
 
+### 8.1 Cập nhật .env file
 ```bash
-# Đảm bảo service auto-start
-sudo systemctl enable body-composition-gateway
-sudo systemctl enable mysql
+# Edit .env file
+nano /opt/actiwell/.env
 
-# Test reboot
-sudo reboot
+# Update these values:
+ACTIWELL_API_URL=https://your-actiwell-api-url.com
+ACTIWELL_API_KEY=your-actual-api-key
+ACTIWELL_LOCATION_ID=your-location-id
 ```
 
-Sau khi reboot, hệ thống sẽ tự động khởi động và có thể truy cập qua web interface.
+### 8.2 Restart service
+```bash
+sudo systemctl restart actiwell-backend
+```
+
+## 📊 BƯỚC 9: KIỂM TRA HOẠT ĐỘNG
+
+### 9.1 Utility scripts
+```bash
+# Tạo script kiểm tra trạng thái
+cat > /opt/actiwell/check_status.sh << 'EOF'
+#!/bin/bash
+echo "=== ACTIWELL BACKEND STATUS ==="
+echo "Service Status:"
+sudo systemctl status actiwell-backend --no-pager -l
+
+echo -e "\nDevice Ports:"
+ls -la /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "No USB devices found"
+
+echo -e "\nDatabase Status:"
+mysql -u actiwell_user -pactiwell_pass123 -e "SELECT COUNT(*) as total_measurements FROM actiwell_measurements.body_measurements;" 2>/dev/null || echo "Database connection failed"
+
+echo -e "\nAPI Status:"
+curl -s http://localhost:5000/api/health | python3 -m json.tool 2>/dev/null || echo "API not responding"
+
+echo -e "\nLogs (last 10 lines):"
+sudo journalctl -u actiwell-backend -n 10 --no-pager
+EOF
+
+chmod +x /opt/actiwell/check_status.sh
+
+# Chạy kiểm tra
+/opt/actiwell/check_status.sh
+```
+
+### 9.2 Test với sample data
+```bash
+# Test measurement creation
+curl -X POST http://localhost:5000/api/measurements \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "test_device",
+    "customer_phone": "0901234567",
+    "weight_kg": 70.5,
+    "body_fat_percent": 15.2,
+    "muscle_mass_kg": 55.3
+  }'
+```
+
+## 🚨 TROUBLESHOOTING
+
+### Common Issues:
+
+1. **Database connection failed**
+   ```bash
+   # Check MySQL service
+   sudo systemctl status mysql
+   
+   # Check credentials
+   mysql -u actiwell_user -pactiwell_pass123 -e "SELECT 1;"
+   ```
+
+2. **Device not detected**
+   ```bash
+   # Check USB devices
+   lsusb
+   ls -la /dev/ttyUSB*
+   
+   # Check permissions
+   groups actiwell
+   ```
+
+3. **Import errors**
+   ```bash
+   # Check virtual environment
+   source /opt/actiwell/venv/bin/activate
+   pip list
+   
+   # Reinstall if needed
+   pip install -r requirements.txt
+   ```
+
+4. **Service won't start**
+   ```bash
+   # Check logs
+   sudo journalctl -u actiwell-backend -f
+   
+   # Check file permissions
+   sudo chown -R actiwell:actiwell /opt/actiwell
+   ```
+
+## 🎯 NEXT STEPS
+
+1. **Kết nối thiết bị Tanita/InBody thực tế**
+2. **Cấu hình Actiwell API credentials**
+3. **Test measurement flow với thiết bị thật**
+4. **Setup monitoring và alerts**
+5. **Backup và disaster recovery**
+
+---
+
+**🎉 Chúc mừng! Hệ thống Actiwell Backend đã sẵn sàng hoạt động!**
