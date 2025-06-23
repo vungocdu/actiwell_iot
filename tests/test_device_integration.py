@@ -2,10 +2,6 @@
 """
 Device Integration Test
 ======================
-
-Test script để kiểm tra kết nối và chức năng của các thiết bị Tanita MC-780MA và InBody 270
-Sử dụng để verify rằng hệ thống có thể kết nối và lấy dữ liệu từ các thiết bị
-
 Usage:
     python test_device_integration.py
     python test_device_integration.py --port /dev/ttyUSB0 --device tanita

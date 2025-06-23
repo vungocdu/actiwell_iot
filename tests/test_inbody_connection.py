@@ -3,9 +3,6 @@
 InBody Connection Test Script
 ===========================
 
-Script kiểm tra kết nối với máy InBody 270
-Hướng dẫn step-by-step để verify hardware và software connection
-
 Usage:
     python test_inbody_connection.py
     python test_inbody_connection.py --port /dev/ttyUSB0
