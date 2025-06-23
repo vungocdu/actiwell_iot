@@ -40,7 +40,7 @@ class InBodyConnectionTester:
         """Run comprehensive InBody connection test"""
         print("INBODY CONNECTION TEST - COMPREHENSIVE CHECK")
         print("=" * 55)
-        print(f"Test Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("Test Time: {}".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         print()
         
         # Step 1: Hardware Detection
@@ -56,9 +56,9 @@ class InBodyConnectionTester:
             print("   - USB drivers installed")
             return False
         
-        print(f"[PASS] Found {len(available_ports)} serial port(s):")
+        print("[PASS] Found {} serial port(s):".format(len(available_ports)))
         for i, port in enumerate(available_ports, 1):
-            print(f"   {i}. {port}")
+            print("   {}. {}".format(i, port))
         
         self.test_results['hardware_check'] = True
         print()
@@ -69,7 +69,7 @@ class InBodyConnectionTester:
             print("[FAIL] No port selected for testing")
             return False
         
-        print(f"Testing port: {test_port}")
+        print("Testing port: {}".format(test_port))
         print()
         
         # Step 3: Port Access Test
@@ -159,7 +159,7 @@ class InBodyConnectionTester:
         
         print("Multiple ports available. Please select:")
         for i, port in enumerate(available_ports, 1):
-            print(f"   {i}. {port}")
+            print("   {}. {}".format(i, port))
         
         try:
             choice = input("Enter number (1-{}): ".format(len(available_ports)))
@@ -183,8 +183,8 @@ class InBodyConnectionTester:
                 timeout=2.0
             )
             
-            print(f"   Port {port} opened successfully")
-            print(f"   Settings: 9600-8-N-1")
+            print("   Port {} opened successfully".format(port))
+            print("   Settings: 9600-8-N-1")
             
             # Test basic read/write
             ser.flushInput()
@@ -194,7 +194,7 @@ class InBodyConnectionTester:
             return True
             
         except Exception as e:
-            print(f"   [FAIL] Failed to open {port}: {e}")
+            print("   [FAIL] Failed to open {}: {}".format(port, e))
             return False
     
     def test_basic_communication(self, port):
@@ -203,7 +203,7 @@ class InBodyConnectionTester:
             ser = serial.Serial(port, 9600, timeout=2.0)
             time.sleep(1)
             
-            print(f"   Connected to {port}")
+            print("   Connected to {}".format(port))
             
             # Clear buffers
             ser.flushInput()
@@ -214,7 +214,7 @@ class InBodyConnectionTester:
             # Test if any data is immediately available
             if ser.in_waiting > 0:
                 data = ser.read(ser.in_waiting)
-                print(f"   Immediate data available: {len(data)} bytes")
+                print("   Immediate data available: {} bytes".format(len(data)))
             else:
                 print("   No immediate data (normal)")
             
@@ -222,7 +222,7 @@ class InBodyConnectionTester:
             return True
             
         except Exception as e:
-            print(f"   [FAIL] Communication error: {e}")
+            print("   [FAIL] Communication error: {}".format(e))
             return False
     
     def test_command_response(self, port):
@@ -241,14 +241,14 @@ class InBodyConnectionTester:
             ]
             
             for cmd in commands:
-                print(f"   Sending: {cmd}")
+                print("   Sending: {}".format(cmd))
                 ser.write(cmd)
                 ser.flush()
                 time.sleep(1)
                 
                 if ser.in_waiting > 0:
                     response = ser.read(ser.in_waiting)
-                    print(f"   Response: {response}")
+                    print("   Response: {}".format(response))
                     ser.close()
                     return True
             
@@ -257,7 +257,7 @@ class InBodyConnectionTester:
             return False
             
         except Exception as e:
-            print(f"   [FAIL] Command test error: {e}")
+            print("   [FAIL] Command test error: {}".format(e))
             return False
     
     def test_data_reception(self, port, timeout=30):
@@ -277,8 +277,8 @@ class InBodyConnectionTester:
                     chunk_str = chunk.decode('utf-8', errors='ignore')
                     buffer += chunk_str
                     
-                    print(f"   Data received: {len(chunk)} bytes")
-                    print(f"   Content preview: {chunk_str[:100]}...")
+                    print("   Data received: {} bytes".format(len(chunk)))
+                    print("   Content preview: {}...".format(chunk_str[:100]))
                     
                     # Check for InBody-like data patterns
                     if any(keyword in buffer.upper() for keyword in 
@@ -291,7 +291,7 @@ class InBodyConnectionTester:
                 elapsed = int(time.time() - start_time)
                 if elapsed % 5 == 0 and elapsed > 0:
                     remaining = timeout - elapsed
-                    print(f"   Still waiting... {remaining}s remaining")
+                    print("   Still waiting... {}s remaining".format(remaining))
                 
                 time.sleep(0.5)
             
@@ -300,7 +300,7 @@ class InBodyConnectionTester:
             return False
             
         except Exception as e:
-            print(f"   [FAIL] Data reception error: {e}")
+            print("   [FAIL] Data reception error: {}".format(e))
             return False
     
     def test_with_inbody_protocol(self, port):
@@ -322,8 +322,8 @@ class InBodyConnectionTester:
                 
                 # Get device info
                 info = inbody.get_device_info()
-                print(f"   Device State: {info['state']}")
-                print(f"   Device Type: {info['device_type']}")
+                print("   Device State: {}".format(info['state']))
+                print("   Device Type: {}".format(info['device_type']))
                 
                 # Test measurement
                 print("   Testing measurement read (15 seconds)...")
@@ -331,8 +331,8 @@ class InBodyConnectionTester:
                 
                 if measurement:
                     print("   [SUCCESS] Measurement successful!")
-                    print(f"   Customer: {measurement.customer_phone}")
-                    print(f"   Weight: {measurement.weight_kg} kg")
+                    print("   Customer: {}".format(measurement.customer_phone))
+                    print("   Weight: {} kg".format(measurement.weight_kg))
                 else:
                     print("   No measurement data (perform measurement to test)")
                 
@@ -347,7 +347,7 @@ class InBodyConnectionTester:
             print("   Make sure you're in the correct directory")
             return False
         except Exception as e:
-            print(f"   [FAIL] Protocol test error: {e}")
+            print("   [FAIL] Protocol test error: {}".format(e))
             return False
     
     def print_test_summary(self):
@@ -358,17 +358,17 @@ class InBodyConnectionTester:
         total_tests = len(self.test_results)
         passed_tests = sum(self.test_results.values())
         
-        print(f"Total Tests: {total_tests}")
-        print(f"Passed: {passed_tests}")
-        print(f"Failed: {total_tests - passed_tests}")
-        print(f"Success Rate: {passed_tests/total_tests*100:.1f}%")
+        print("Total Tests: {}".format(total_tests))
+        print("Passed: {}".format(passed_tests))
+        print("Failed: {}".format(total_tests - passed_tests))
+        print("Success Rate: {:.1f}%".format(passed_tests/total_tests*100))
         print()
         
         print("Detailed Results:")
         for test, result in self.test_results.items():
             status = "[PASS]" if result else "[FAIL]"
             test_name = test.replace('_', ' ').title()
-            print(f"  {status} {test_name}")
+            print("  {} {}".format(status, test_name))
         
         print()
         
@@ -414,9 +414,9 @@ def main():
         print("=" * 30)
         ports = tester.scan_serial_ports()
         if ports:
-            print(f"Found {len(ports)} accessible port(s):")
+            print("Found {} accessible port(s):".format(len(ports)))
             for port in ports:
-                print(f"  {port}")
+                print("  {}".format(port))
         else:
             print("[FAIL] No accessible ports found")
         return
