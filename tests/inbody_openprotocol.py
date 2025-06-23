@@ -38,6 +38,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("InBodyReader")
 
+def safe_makedirs(path):
+    """Create directory safely, compatible with older Python versions"""
+    try:
+        os.makedirs(path)
+    except OSError:
+        if not os.path.isdir(path):
+            raise
+
 # Configuration
 class Config:
     """Configuration settings"""
@@ -249,7 +257,7 @@ class InBodyReader:
         
         # Create data directory
         if config.SAVE_RAW_DATA or config.SAVE_PARSED_DATA:
-            os.makedirs(config.DATA_DIR, exist_ok=True)
+            safe_makedirs(config.DATA_DIR)
     
     def find_inbody_port(self):
         """Find InBody serial port"""
