@@ -1,4 +1,4 @@
-# /opt/actiwell/actiwell_backend/api/auth_routes.py
+# /opt/actiwell_iot/actiwell_backend/api/auth_routes.py
 
 import jwt
 from datetime import datetime, timedelta
