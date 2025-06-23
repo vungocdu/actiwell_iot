@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-InBody HL7 Reader
-This script reads HL7 messages from an InBody device over a serial connection
+HL7 Reader for InBody 270
 """
 
 import serial
@@ -32,7 +31,6 @@ def parse_hl7_message(hl7_text):
         if fields[0] == 'PID':
             data['patient_id'] = fields[3] if len(fields) > 3 else ''
         elif fields[0] == 'OBX':
-            # OBX|1|NM|WT^Weight||65.2|kg
             if len(fields) > 5:
                 code_field = fields[3]
                 value = fields[5]
@@ -60,7 +58,7 @@ def read_hl7_from_serial():
             stopbits=serial.STOPBITS_ONE,
             timeout=1.0
         )
-        logger.info(f"Opened serial port {SERIAL_PORT}")
+        logger.info("Opened serial port {}".format(SERIAL_PORT))
 
         buffer = b''
 
@@ -81,7 +79,7 @@ def read_hl7_from_serial():
                 logger.info(hl7_raw.replace('\r', '\n'))
 
                 parsed = parse_hl7_message(hl7_raw)
-                logger.info(f"Parsed Data: {parsed}")
+                logger.info("Parsed Data: {}".format(parsed))
 
                 # Reset buffer
                 buffer = buffer[end+1:]
@@ -89,7 +87,7 @@ def read_hl7_from_serial():
             time.sleep(0.01)
 
     except Exception as e:
-        logger.error(f"Serial Error: {e}")
+        logger.error("Serial Error: {}".format(e))
 
 
 if __name__ == '__main__':
