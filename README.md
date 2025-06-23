@@ -26,64 +26,66 @@ sudo chown -R actiwell:actiwell /opt/actiwell_iot
 
 Ứng dụng được tổ chức dưới dạng một package Python (actiwell_iot).
 
-actiwell_tanita_integration/
-├── .env                          # Environment variables
-├── .gitignore                    # Git ignore file
-├── requirements.txt              # Python dependencies (đổi tên từ requirement.txt)
-├── README.md                     # Documentation
-├── run.py                       # Main application entry point
-├── setup_database.sql           # Database schema (đổi tên từ db.sql)
-├── LICENSE                      # License file
-│
-├── actiwell_backend/            # Main application package
-│   ├── __init__.py             # Package initialization + App Factory
-│   ├── config.py               # Configuration (move từ root)
-│   ├── models.py               # Database models
-│   │
-│   ├── core/                   # Core business logic
-│   │   ├── __init__.py
-│   │   ├── database_manager.py # Database operations
-│   │   ├── device_manager.py   # Device management (gộp device_communication.py)
-│   │   └── actiwell_api.py     # Actiwell API integration
-│   │
-│   ├── api/                    # REST API endpoints
-│   │   ├── __init__.py
-│   │   ├── auth_routes.py      # Authentication
-│   │   ├── device_routes.py    # Device management API
-│   │   ├── measurement_routes.py # Measurement API  
-│   │   ├── sync_routes.py      # Sync API
-│   │   └── system_routes.py    # System monitoring API
-│   │
-│   ├── services/               # Business services
-│   │   ├── __init__.py
-│   │   ├── measurement_service.py # Measurement processing
-│   │   ├── sync_service.py     # Data synchronization
-│   │   └── health_service.py   # Health monitoring
-│   │
-│   ├── static/                 # Static files (CSS, JS, images)
-│   │   ├── css/
-│   │   ├── js/
-│   │   └── images/
-│   │
-│   └── templates/              # HTML templates
-│       ├── base.html
-│       ├── dashboard.html
-│       ├── error.html
-│       └── initializing.html
-│
-├── scripts/                    # Utility scripts (rename từ test_scripts)
-│   ├── install.sh             # Installation script
-│   ├── test_tanita.sh         # Tanita testing
-│   ├── backup.sh              # Backup script
-│   └── system_check.sh        # System health check
-│
-├── logs/                       # Log files directory
-├── data/                       # Data storage directory
-└── tests/                      # Unit tests
-    ├── __init__.py
-    ├── test_device_manager.py
-    ├── test_database.py
-    └── test_api.py
+actiwell_iot
+├── .env
+├── .env.example
+├── .gitignore
+├── actiwell_backend
+│   ├── api
+│   │   ├── auth_routes.py
+│   │   ├── device_routes.py
+│   │   ├── measurement_routes.py
+│   │   ├── sync_routes.py
+│   │   ├── system_routes.py
+│   │   └── __init__.py
+│   ├── core
+│   │   ├── actiwell_api.py
+│   │   ├── database_manager.py
+│   │   ├── device_communication.py
+│   │   ├── device_manager.py
+│   │   └── __init__.py
+│   ├── devices
+│   │   ├── base_protocol.py
+│   │   ├── inbody_protocol.py
+│   │   ├── tanita_protocol.py
+│   │   └── __init__.py
+│   ├── models.py
+│   ├── services
+│   │   ├── health_service.py
+│   │   ├── measurement_service.py
+│   │   ├── sync_service.py
+│   │   └── __init__.py
+│   ├── templates
+│   │   ├── base.html
+│   │   ├── dashboard.html
+│   │   ├── error.html
+│   │   └── initializing.html
+│   └── __init__.py
+├── config.py
+├── data
+├── Deployment Steps.md
+├── docs
+├── LICENSE
+├── logs
+├── README.md
+├── requirements.txt
+├── run.py
+├── setup_database.sql
+├── static
+│   ├── css
+│   ├── images
+│   └── js
+├── tests
+│   ├── test_api.py
+│   ├── test_database.py
+│   ├── test_device_manager.py
+│   └── __init__.py
+└── test_scripts
+    ├── enhanced_tanita_test.sh
+    ├── installation.sh
+    ├── system_test_script.sh
+    ├── tanita_production_setup.sh
+    └── tanita_test_compatible.sh
 
 2.2. Sao chép mã nguồn
 

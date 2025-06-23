@@ -26,9 +26,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, render_template, jsonify
 from flask_cors import CORS
 
+# Add project root to Python path
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, project_root)
+
 # Import application components
 try:
-    from actiwell_backend.config import Config, DevelopmentConfig, ProductionConfig
+    from config import Config, DevelopmentConfig, ProductionConfig
     from actiwell_backend.core.database_manager import DatabaseManager
     from actiwell_backend.core.device_manager import DeviceManager
     from actiwell_backend.core.actiwell_api import ActiwellAPI
