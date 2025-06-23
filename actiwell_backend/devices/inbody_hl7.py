@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Combined HL7 + Connection Test for InBody 270
-- Kiểm tra port và đọc dữ liệu HL7 nếu kết nối thành công
+This script tests the connection to an InBody 270 device via serial port,
+reads HL7 messages, and parses the relevant data fields.
 """
 
 import serial
