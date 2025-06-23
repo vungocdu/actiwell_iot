@@ -34,7 +34,7 @@ logger = logging.getLogger("InBodyReader")
 BAUDRATE = 9600
 TIMEOUT = 0.5  # Serial port read timeout in seconds
 
-def find_inbody_port() -> Optional[str]:
+def find_inbody_port():
     logger.info("Scanning for available serial ports...")
     available_ports = serial.tools.list_ports.comports()
     
