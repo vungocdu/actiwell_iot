@@ -60,7 +60,7 @@ def read_hl7_from_serial():
             stopbits=serial.STOPBITS_ONE,
             timeout=1.0
         )
-        logger.info(f"✅ Opened serial port {SERIAL_PORT}")
+        logger.info(f"Opened serial port {SERIAL_PORT}")
 
         buffer = b''
 
@@ -77,11 +77,11 @@ def read_hl7_from_serial():
                 end = buffer.index(END_BLOCK)
                 hl7_raw = buffer[start:end].decode('utf-8', errors='ignore')
 
-                logger.info("📥 Received HL7 message:")
+                logger.info("Received HL7 message:")
                 logger.info(hl7_raw.replace('\r', '\n'))
 
                 parsed = parse_hl7_message(hl7_raw)
-                logger.info(f"📋 Parsed Data: {parsed}")
+                logger.info(f"Parsed Data: {parsed}")
 
                 # Reset buffer
                 buffer = buffer[end+1:]
@@ -89,7 +89,7 @@ def read_hl7_from_serial():
             time.sleep(0.01)
 
     except Exception as e:
-        logger.error(f"❌ Serial Error: {e}")
+        logger.error(f"Serial Error: {e}")
 
 
 if __name__ == '__main__':
