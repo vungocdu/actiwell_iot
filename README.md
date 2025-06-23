@@ -1,6 +1,4 @@
-ACTIWELL BACKEND - HƯỚNG DẪN CÀI ĐẶT VÀ TRIỂN KHAI
-
-Tài liệu này hướng dẫn cách cài đặt và chạy hệ thống Actiwell Backend trên một máy chủ Linux (ví dụ: Raspberry Pi, Ubuntu Server). Hệ thống được thiết kế theo cấu trúc package và sử dụng Application Factory pattern để đảm bảo tính ổn định và khả năng mở rộng.
+Tài liệu này hướng dẫn cách cài đặt và chạy hệ thống Actiwell IoT Backend trên một máy chủ Linux (ví dụ: Raspberry Pi, Ubuntu Server). Hệ thống được thiết kế theo cấu trúc package và sử dụng Application Factory pattern để đảm bảo tính ổn định và khả năng mở rộng.
 
 📋 BƯỚC 1: CHUẨN BỊ MÔI TRƯỜNG
 1.1. Cập nhật hệ thống
@@ -14,45 +12,80 @@ sudo apt install -y python3 python3-pip python3-venv mariadb-server usbutils
 
 1.3. Tạo người dùng và cấu trúc thư mục
 # Tạo thư mục project gốc
-sudo mkdir -p /opt/actiwell
-cd /opt/actiwell
+sudo mkdir -p /opt/ctiwell_iot
+cd /opt/ctiwell_iot
 
 # Tạo người dùng 'actiwell' riêng cho ứng dụng để tăng cường bảo mật
 sudo useradd -r -s /bin/false -d /opt/actiwell actiwell
 
 # Gán quyền sở hữu thư mục cho người dùng vừa tạo
-sudo chown -R actiwell:actiwell /opt/actiwell
+sudo chown -R actiwell:actiwell /opt/actiwell_iot
 
 📁 BƯỚC 2: THIẾT LẬP MÃ NGUỒN ỨNG DỤNG
 2.1. Cấu trúc thư mục ứng dụng
 
-Ứng dụng được tổ chức dưới dạng một package Python (actiwell_backend).
+Ứng dụng được tổ chức dưới dạng một package Python (actiwell_iot).
 
-Generated code
-/opt/actiwell/
-├── run.py                 # File thực thi chính để khởi động server
-├── config.py              # File cấu hình trung tâm
-├── requirements.txt       # Danh sách các thư viện Python
-├── .env                   # Biến môi trường (cơ sở dữ liệu, API keys)
-└── actiwell_backend/      # PACKAGE CHÍNH CỦA ỨNG DỤNG
-    ├── __init__.py        # Application Factory (create_app)
-    ├── models.py          # Models dữ liệu
-    ├── database_manager.py# Logic cơ sở dữ liệu
-    ├── device_manager.py  # Logic giao tiếp thiết bị
-    ├── actiwell_api.py    # Logic tích hợp Actiwell API
-    │
-    ├── api/               # Chứa các API Blueprints
-    │   ├── __init__.py
-    │   ├── auth_routes.py
-    │   └── device_routes.py
-    │
-    ├── services/          # Chứa các tiến trình chạy nền
-    │   ├── __init__.py
-    │   ├── measurement_processor.py
-    │   └── sync_retry.py
-    │
-    ├── static/            # Tài nguyên tĩnh (CSS, JS)
-    └── templates/         # Giao diện HTML (Jinja2)
+actiwell_iot
+├── .env
+├── .env.example
+├── .gitignore
+├── actiwell_backend
+│   ├── api
+│   │   ├── auth_routes.py
+│   │   ├── device_routes.py
+│   │   ├── measurement_routes.py
+│   │   ├── sync_routes.py
+│   │   ├── system_routes.py
+│   │   └── __init__.py
+│   ├── core
+│   │   ├── actiwell_api.py
+│   │   ├── database_manager.py
+│   │   ├── device_communication.py
+│   │   ├── device_manager.py
+│   │   └── __init__.py
+│   ├── devices
+│   │   ├── base_protocol.py
+│   │   ├── inbody_protocol.py
+│   │   ├── tanita_protocol.py
+│   │   └── __init__.py
+│   ├── models.py
+│   ├── services
+│   │   ├── health_service.py
+│   │   ├── measurement_service.py
+│   │   ├── sync_service.py
+│   │   └── __init__.py
+│   ├── templates
+│   │   ├── base.html
+│   │   ├── dashboard.html
+│   │   ├── error.html
+│   │   └── initializing.html
+│   └── __init__.py
+├── config.py
+├── data
+├── Deployment Steps.md
+├── docs
+├── LICENSE
+├── logs
+├── README.md
+├── requirements.txt
+├── run.py
+├── setup_database.sql
+├── static
+│   ├── css
+│   ├── images
+│   └── js
+├── tests
+│   ├── test_api.py
+│   ├── test_database.py
+│   ├── test_device_manager.py
+│   └── __init__.py
+└── test_scripts
+    ├── enhanced_tanita_test.sh
+    ├── installation.sh
+    ├── system_test_script.sh
+    ├── tanita_production_setup.sh
+    └── tanita_test_compatible.sh
 
 2.2. Sao chép mã nguồn
 
@@ -73,7 +106,7 @@ psutil==5.9.5
 
 File này chứa các thông tin nhạy cảm. Tuyệt đối không đưa file này lên Git.
 
-sudo nano /opt/actiwell/.env
+sudo nano /opt/actiwell_iot/.env
 
 Generated env
 # Database Configuration
@@ -99,8 +132,8 @@ FLASK_DEBUG=False
 AUTO_DETECT_DEVICES=True
 DEVICE_TIMEOUT=5
 
-sudo chown actiwell:actiwell /opt/actiwell/.env
-sudo chmod 600 /opt/actiwell/.env
+sudo chown actiwell:actiwell /opt/actiwell_iot/.env
+sudo chmod 600 /opt/actiwell_iot/.env
 
 🗄️ BƯỚC 3: CÀI ĐẶT CƠ SỞ DỮ LIỆU
 3.1. Bảo mật MariaDB
@@ -126,7 +159,7 @@ Lưu ý: Ứng dụng được thiết kế để tự động tạo các bảng
 🐍 BƯỚC 4: THIẾT LẬP MÔI TRƯỜNG PYTHON
 4.1. Tạo môi trường ảo (Virtual Environment)
 Generated bash
-cd /opt/actiwell
+cd /opt/actiwell_iot
 
 # Tạo môi trường ảo với quyền của user 'actiwell'
 sudo -u actiwell python3 -m venv venv
@@ -170,10 +203,10 @@ sudo udevadm trigger
 
 Trước khi tạo service, hãy chạy thử để đảm bảo mọi thứ hoạt động.
 
-cd /opt/actiwell
+cd /opt/actiwell_iot
 
 # Chạy ứng dụng với quyền của user 'actiwell'
-sudo -u actiwell /opt/actiwell/venv/bin/python run.py
+sudo -u actiwell /opt/actiwell_iot/venv/bin/python run.py
 
 
 Bạn sẽ thấy log khởi động. Mở trình duyệt và truy cập http://<your-server-ip>:5000. Nếu thành công, nhấn Ctrl+C để dừng.
@@ -245,5 +278,3 @@ Kiểm tra thiết bị có được nhận không: ls -l /dev/ttyUSB*
 Kiểm tra quyền của user: groups actiwell (phải có dialout).
 
 Service không khởi động: Kiểm tra log chi tiết: sudo journalctl -u actiwell-backend.service --no-pager.
-
-🎉 Chúc mừng! Hệ thống Actiwell Backend của bạn đã sẵn sàng hoạt động!
