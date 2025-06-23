@@ -10,9 +10,10 @@ Description:
 - Reads and parses measurement data from the device
 - Saves data to files for further processing
 - No external API dependencies
+- Compatible with Python 3.5+
 
 Author: Professional IoT Engineer
-Version: 2.1.0 (Clean ASCII)
+Version: 2.1.1 (Final Clean)
 """
 
 import serial
@@ -40,18 +41,19 @@ logger = logging.getLogger("InBodyReader")
 # Configuration
 class Config:
     """Configuration settings"""
-    BAUDRATE = 9600
-    TIMEOUT = 0.5
-    MESSAGE_TIMEOUT = 2.0
-    RECONNECT_DELAY = 10
-    
-    # Data storage
-    SAVE_RAW_DATA = True
-    SAVE_PARSED_DATA = True
-    DATA_DIR = "inbody_data"
-    
-    # Output format
-    DISPLAY_VERBOSE = True
+    def __init__(self):
+        self.BAUDRATE = 9600
+        self.TIMEOUT = 0.5
+        self.MESSAGE_TIMEOUT = 2.0
+        self.RECONNECT_DELAY = 10
+        
+        # Data storage
+        self.SAVE_RAW_DATA = True
+        self.SAVE_PARSED_DATA = True
+        self.DATA_DIR = "inbody_data"
+        
+        # Output format
+        self.DISPLAY_VERBOSE = True
 
 class InBodyDataParser:
     """Enhanced parser for different InBody data formats"""
@@ -110,7 +112,6 @@ class InBodyDataParser:
     
     def _try_csv_format(self, data, result):
         """Try parsing as CSV-like format"""
-        """Try parsing as CSV-like format"""
         lines = data.split('\n')
         for line in lines:
             if ',' in line and len(line.split(',')) >= 3:
@@ -132,7 +133,6 @@ class InBodyDataParser:
         return False
     
     def _try_key_value_format(self, data, result):
-        """Try parsing as Key: Value format"""
         """Try parsing as Key: Value format"""
         found_measurements = 0
         lines = data.split('\n')
@@ -160,13 +160,11 @@ class InBodyDataParser:
     
     def _try_structured_format(self, data, result):
         """Try parsing structured/proprietary format"""
-        """Try parsing structured/proprietary format"""
         if 'InBody' in data and len(data) > 50:
             return self._extract_measurements(data, result)
         return False
     
     def _extract_measurements(self, data, result):
-        """Extract individual measurements using regex patterns"""
         """Extract individual measurements using regex patterns"""
         extracted = 0
         
@@ -192,7 +190,6 @@ class InBodyDataParser:
     
     def _extract_customer_id(self, data, result):
         """Extract customer ID/phone number"""
-        """Extract customer ID/phone number"""
         id_match = self.patterns['id_field'].search(data)
         if id_match:
             customer_id = id_match.group(1).strip()
@@ -214,7 +211,6 @@ class InBodyDataParser:
     
     def _validate_measurements(self, data):
         """Validate measurement values are within reasonable ranges"""
-        """Validate measurement values are within reasonable ranges"""
         validations = {
             'weight_kg': (20, 300),
             'bmi': (10, 50),
@@ -224,7 +220,8 @@ class InBodyDataParser:
             'total_body_water_kg': (10, 100)
         }
         
-        for field, (min_val, max_val) in validations.items():
+        for field, limits in validations.items():
+            min_val, max_val = limits
             if field in data and data[field] is not None:
                 value = data[field]
                 if not (min_val <= value <= max_val):
@@ -236,7 +233,6 @@ class InBodyDataParser:
     
     def _is_number(self, value):
         """Check if string can be converted to float"""
-        """Check if string can be converted to float"""
         try:
             float(value)
             return True
@@ -246,7 +242,7 @@ class InBodyDataParser:
 class InBodyReader:
     """Main InBody reader class"""
     
-    def __init__(self, config: Config):
+    def __init__(self, config):
         self.config = config
         self.parser = InBodyDataParser()
         self.measurement_count = 0
@@ -256,7 +252,6 @@ class InBodyReader:
             os.makedirs(config.DATA_DIR, exist_ok=True)
     
     def find_inbody_port(self):
-        """Find InBody serial port"""
         """Find InBody serial port"""
         logger.info("Scanning for available serial ports...")
         available_ports = serial.tools.list_ports.comports()
@@ -294,7 +289,7 @@ class InBodyReader:
         logger.error("Could not find a valid InBody serial port.")
         return None
     
-    def save_raw_data(self, data: str):
+    def save_raw_data(self, data):
         """Save raw data to file"""
         if self.config.SAVE_RAW_DATA:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -313,7 +308,6 @@ class InBodyReader:
     
     def save_parsed_data(self, data):
         """Save parsed data to JSON file"""
-        """Save parsed data to JSON file"""
         if self.config.SAVE_PARSED_DATA:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = os.path.join(self.config.DATA_DIR, 
@@ -329,7 +323,6 @@ class InBodyReader:
                 logger.error("Failed to save parsed data: {}".format(e))
     
     def display_measurement(self, data):
-        """Display measurement results"""
         """Display measurement results"""
         self.measurement_count += 1
         
@@ -390,7 +383,6 @@ class InBodyReader:
         print("="*60 + "\n")
     
     def listen_for_measurements(self, port):
-        """Main listening loop"""
         """Main listening loop"""
         while True:
             logger.info("Connecting to InBody on port {} at {} baud...".format(
