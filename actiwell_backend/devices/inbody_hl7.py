@@ -1,28 +1,47 @@
 #!/usr/bin/env python3
 """
-HL7 Reader for InBody 270
+Combined HL7 + Connection Test for InBody 270
+- Kiểm tra port và đọc dữ liệu HL7 nếu kết nối thành công
 """
 
 import serial
 import time
-import re
+import glob
 import logging
+import argparse
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("InBodyHL7")
 
-# Serial Port Config
-SERIAL_PORT = '/dev/ttyUSB0'
-BAUDRATE = 9600
-
-# HL7 message start and end
+# HL7 markers
 START_BLOCK = b'\x0b'  # VT (vertical tab)
 END_BLOCK = b'\x1c'    # FS (file separator)
 CARRIAGE_RETURN = b'\x0d'  # CR
 
+BAUDRATE = 9600
+
+
+def scan_serial_ports():
+    """Scan for available serial ports"""
+    ports = []
+    patterns = ['/dev/ttyUSB*', '/dev/ttyACM*', '/dev/ttyS*']
+    for pattern in patterns:
+        ports.extend(glob.glob(pattern))
+    return ports
+
+
+def test_port_access(port):
+    try:
+        ser = serial.Serial(port, baudrate=BAUDRATE, timeout=1.0)
+        ser.close()
+        logger.info("Port access OK: {}".format(port))
+        return True
+    except Exception as e:
+        logger.error("Cannot open port {}: {}".format(port, e))
+        return False
+
 
 def parse_hl7_message(hl7_text):
-    """Parses a raw HL7 message string and extracts meaningful fields."""
     segments = hl7_text.strip().split('\r')
     data = {}
 
@@ -34,7 +53,6 @@ def parse_hl7_message(hl7_text):
             if len(fields) > 5:
                 code_field = fields[3]
                 value = fields[5]
-
                 if 'WT' in code_field:
                     data['weight_kg'] = float(value)
                 elif 'HT' in code_field:
@@ -47,29 +65,22 @@ def parse_hl7_message(hl7_text):
     return data
 
 
-def read_hl7_from_serial():
-    """Continuously reads HL7 messages from serial port and parses them."""
+def read_hl7(port):
     try:
-        ser = serial.Serial(
-            port=SERIAL_PORT,
-            baudrate=BAUDRATE,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=1.0
-        )
-        logger.info("Opened serial port {}".format(SERIAL_PORT))
-
+        ser = serial.Serial(port, baudrate=BAUDRATE, timeout=1.0)
+        logger.info("Connected to port: {}".format(port))
         buffer = b''
 
-        while True:
+        print("Please perform a measurement on InBody device...")
+        start_time = time.time()
+
+        while time.time() - start_time < 60:
             byte = ser.read(1)
             if not byte:
                 continue
 
             buffer += byte
 
-            # Check for complete HL7 message
             if START_BLOCK in buffer and END_BLOCK in buffer:
                 start = buffer.index(START_BLOCK) + 1
                 end = buffer.index(END_BLOCK)
@@ -80,15 +91,38 @@ def read_hl7_from_serial():
 
                 parsed = parse_hl7_message(hl7_raw)
                 logger.info("Parsed Data: {}".format(parsed))
-
-                # Reset buffer
-                buffer = buffer[end+1:]
+                return True
 
             time.sleep(0.01)
 
+        logger.warning("No HL7 message received within 60 seconds")
+        return False
+
     except Exception as e:
-        logger.error("Serial Error: {}".format(e))
+        logger.error("Read error: {}".format(e))
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', help='Serial port to test (e.g. /dev/ttyUSB0)')
+    args = parser.parse_args()
+
+    ports = [args.port] if args.port else scan_serial_ports()
+
+    if not ports:
+        logger.error("No serial ports found")
+        return
+
+    for port in ports:
+        print("\n--- Testing port {} ---".format(port))
+        if test_port_access(port):
+            read_hl7(port)
+        else:
+            print("Skipping port {} due to access failure".format(port))
 
 
 if __name__ == '__main__':
-    read_hl7_from_serial()
+    main()
+# This script is designed to test the connection to an InBody 270 device via serial port,
+# read HL7 messages, and parse the relevant data fields.
