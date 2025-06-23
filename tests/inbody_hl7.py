@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
 Combined HL7 + Connection Test for InBody 270
-This script tests the connection to an InBody 270 device via serial port,
-reads HL7 messages, and parses the relevant data fields.
 """
 
 import serial
@@ -75,7 +73,7 @@ def read_hl7(port):
         print("Please perform a measurement on InBody device...")
         start_time = time.time()
 
-        while time.time() - start_time < 60:
+        while time.time() - start_time < 180:
             byte = ser.read(1)
             if not byte:
                 continue
@@ -96,7 +94,7 @@ def read_hl7(port):
 
             time.sleep(0.01)
 
-        logger.warning("No HL7 message received within 60 seconds")
+        logger.warning("No HL7 message received within 180 seconds")
         return False
 
     except Exception as e:
@@ -125,5 +123,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-# This script is designed to test the connection to an InBody 270 device via serial port,
-# read HL7 messages, and parse the relevant data fields.
