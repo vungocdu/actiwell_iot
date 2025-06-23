@@ -12,7 +12,7 @@ Description:
   when configured in "Serial Open Protocol (One Way)" mode.
 
 Author: Professional IoT Engineer
-Version: 1.2.1 (Syntax Corrected)
+Version: 1.2.1 (Syntax Corrected for Python 3.5)
 """
 
 import serial
@@ -20,7 +20,6 @@ import serial.tools.list_ports
 import time
 import logging
 import re
-from typing import Dict, Optional
 
 # Configure logging to monitor the script's activity
 logging.basicConfig(
@@ -35,9 +34,10 @@ BAUDRATE = 9600
 TIMEOUT = 0.5  # Serial port read timeout in seconds
 
 def find_inbody_port():
+    # type: () -> str or None
     logger.info("Scanning for available serial ports...")
     available_ports = serial.tools.list_ports.comports()
-    
+
     if not available_ports:
         logger.warning("No serial ports found on this system.")
         return None
@@ -59,17 +59,18 @@ def find_inbody_port():
     logger.error("Could not find a valid or accessible InBody serial port.")
     return None
 
-def parse_inbody_data(raw_data: str) -> Dict[str, any]:
+def parse_inbody_data(raw_data):
+    # type: (str) -> dict
     data = {}
     data['raw_data'] = raw_data
-    
+
     pattern = re.compile(r'([a-zA-Z\s]+):\s*([\d\.]+)')
 
     lines = raw_data.strip().split('\n')
     for line in lines:
         match = pattern.search(line)
         if match:
-            key = match.group(1).strip().replace(' ', '_') 
+            key = match.group(1).strip().replace(' ', '_')
             try:
                 value = float(match.group(2).strip())
                 if 'kg' in line.lower():
@@ -84,10 +85,10 @@ def parse_inbody_data(raw_data: str) -> Dict[str, any]:
     id_match = re.search(r'ID\s*:\s*([^\n\r]+)', raw_data)
     if id_match:
         data['ID'] = id_match.group(1).strip()
-        
+
     return data
 
-def listen_for_measurement(port: str):
+def listen_for_measurement(port):
     while True:
         logger.info("Attempting to connect to InBody on port {} at {} baud...".format(port, BAUDRATE))
         try:
@@ -109,19 +110,19 @@ def listen_for_measurement(port: str):
 
                     if message_buffer and (time.time() - last_data_time > 1.0):
                         logger.info("Full measurement packet received.")
-                        
+
                         parsed_data = parse_inbody_data(message_buffer)
-                        
+
                         print("\n" + "="*50)
                         logger.info("MEASUREMENT RESULT")
                         print("="*50)
-                        
+
                         for key, value in parsed_data.items():
                             if key != 'raw_data':
                                 print("{:<25}: {}".format(key.replace('_', ' ').title(), value))
-                        
+
                         print("="*50 + "\n")
-                        
+
                         message_buffer = ""
                         logger.info("System is ready for the next measurement.")
                         print("\n>>> Please perform a measurement on the InBody device <<<\n")
