@@ -22,7 +22,6 @@ import logging
 import re
 import json
 from datetime import datetime
-from typing import Dict, Optional
 import os
 import sys
 
@@ -74,7 +73,7 @@ class InBodyDataParser:
             'bone': re.compile(r'(?:bone|bm)\s*[:\s]*([\d\.]+)', re.IGNORECASE),
         }
     
-    def parse_data(self, raw_data: str) -> Dict[str, any]:
+    def parse_data(self, raw_data):
         """
         Parse raw InBody data into structured format
         """
@@ -109,7 +108,8 @@ class InBodyDataParser:
         
         return data
     
-    def _try_csv_format(self, data: str, result: Dict) -> bool:
+    def _try_csv_format(self, data, result):
+        """Try parsing as CSV-like format"""
         """Try parsing as CSV-like format"""
         lines = data.split('\n')
         for line in lines:
@@ -131,7 +131,8 @@ class InBodyDataParser:
                         continue
         return False
     
-    def _try_key_value_format(self, data: str, result: Dict) -> bool:
+    def _try_key_value_format(self, data, result):
+        """Try parsing as Key: Value format"""
         """Try parsing as Key: Value format"""
         found_measurements = 0
         lines = data.split('\n')
@@ -157,13 +158,15 @@ class InBodyDataParser:
         
         return found_measurements >= 3
     
-    def _try_structured_format(self, data: str, result: Dict) -> bool:
+    def _try_structured_format(self, data, result):
+        """Try parsing structured/proprietary format"""
         """Try parsing structured/proprietary format"""
         if 'InBody' in data and len(data) > 50:
             return self._extract_measurements(data, result)
         return False
     
-    def _extract_measurements(self, data: str, result: Dict) -> bool:
+    def _extract_measurements(self, data, result):
+        """Extract individual measurements using regex patterns"""
         """Extract individual measurements using regex patterns"""
         extracted = 0
         
@@ -187,7 +190,8 @@ class InBodyDataParser:
         
         return extracted >= 2
     
-    def _extract_customer_id(self, data: str, result: Dict):
+    def _extract_customer_id(self, data, result):
+        """Extract customer ID/phone number"""
         """Extract customer ID/phone number"""
         id_match = self.patterns['id_field'].search(data)
         if id_match:
@@ -208,7 +212,8 @@ class InBodyDataParser:
                 else:
                     result['customer_phone'] = phone
     
-    def _validate_measurements(self, data: Dict):
+    def _validate_measurements(self, data):
+        """Validate measurement values are within reasonable ranges"""
         """Validate measurement values are within reasonable ranges"""
         validations = {
             'weight_kg': (20, 300),
@@ -229,7 +234,8 @@ class InBodyDataParser:
                 else:
                     data['{}_validation'.format(field)] = 'valid'
     
-    def _is_number(self, value: str) -> bool:
+    def _is_number(self, value):
+        """Check if string can be converted to float"""
         """Check if string can be converted to float"""
         try:
             float(value)
@@ -249,7 +255,8 @@ class InBodyReader:
         if config.SAVE_RAW_DATA or config.SAVE_PARSED_DATA:
             os.makedirs(config.DATA_DIR, exist_ok=True)
     
-    def find_inbody_port(self) -> Optional[str]:
+    def find_inbody_port(self):
+        """Find InBody serial port"""
         """Find InBody serial port"""
         logger.info("Scanning for available serial ports...")
         available_ports = serial.tools.list_ports.comports()
@@ -304,7 +311,8 @@ class InBodyReader:
             except Exception as e:
                 logger.error("Failed to save raw data: {}".format(e))
     
-    def save_parsed_data(self, data: Dict):
+    def save_parsed_data(self, data):
+        """Save parsed data to JSON file"""
         """Save parsed data to JSON file"""
         if self.config.SAVE_PARSED_DATA:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -320,7 +328,8 @@ class InBodyReader:
             except Exception as e:
                 logger.error("Failed to save parsed data: {}".format(e))
     
-    def display_measurement(self, data: Dict):
+    def display_measurement(self, data):
+        """Display measurement results"""
         """Display measurement results"""
         self.measurement_count += 1
         
@@ -380,7 +389,8 @@ class InBodyReader:
         
         print("="*60 + "\n")
     
-    def listen_for_measurements(self, port: str):
+    def listen_for_measurements(self, port):
+        """Main listening loop"""
         """Main listening loop"""
         while True:
             logger.info("Connecting to InBody on port {} at {} baud...".format(
