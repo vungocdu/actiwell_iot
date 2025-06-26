@@ -471,4 +471,29 @@ Nếu bạn đang sử dụng phiên bản cũ, tham khảo file `Deployment Ste
 
 ---
 
+# Đảm bảo Raspberry Pi và InBody cùng network
+# InBody device IP: 192.168.1.100
+# Raspberry Pi IP: 192.168.1.50
+
+# Test connectivity
+ping -c 3 192.168.1.100
+
+# Check port availability
+netstat -tuln | grep :2575
+
+
+cd /opt/actiwell_iot/tests
+
+# Set environment variables cho test
+export INBODY_IP=192.168.1.100
+export PI_IP=192.168.1.50
+export DATA_PORT=2575
+export LISTENING_PORT=2580
+export TEST_PHONE=0965385123
+
+# Chạy test suite
+chmod +x inbody_hl7.sh
+./inbody_hl7.sh
+netstat -tuln | grep :2580
+
 **Actiwell IoT Backend v2.0** - Professional body composition gateway for healthcare and fitness industry.

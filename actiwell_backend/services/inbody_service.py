@@ -1,56 +1,103 @@
 #!/usr/bin/env python3
 """
-InBody Integration Service
-Business logic layer for InBody 370s measurements processing
+InBody Integration Service - Fixed Version
+Business logic layer for InBody device integration
+Focuses on orchestration and business rules specific to InBody devices
+Fixed issues with None handling and error management
 """
 
 import logging
-import json
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-from dataclasses import asdict
+from typing import Dict, List, Optional, Union
 
-from ..devices.inbody_370s_handler import InBodyMeasurement, InBody370sHandler
-from ..core.database_manager import DatabaseManager
-from ..core.actiwell_api import ActiwellAPI
-from .measurement_service import MeasurementService
-from .sync_service import SyncService
-from config import ACTIWELL_CONFIG, INBODY_CONFIG
+try:
+    from ..devices.inbody_protocol import InBodyProtocol
+    from ..devices.base_protocol import MeasurementData
+    from .measurement_service import MeasurementService
+    from .sync_service import SyncService
+except ImportError:
+    # Fallback for direct testing
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    from devices.inbody_protocol import InBodyProtocol
+    from devices.base_protocol import MeasurementData
+    from services.measurement_service import MeasurementService
+    from services.sync_service import SyncService
 
 logger = logging.getLogger(__name__)
 
-
 class InBodyService:
-    """Main service class for InBody 370s integration"""
+    """
+    InBody-specific business logic service
+    Handles InBody device integration and business rules
+    Fixed version with improved error handling
+    """
     
-    def __init__(self, database_manager: DatabaseManager, actiwell_api: ActiwellAPI):
-        self.database_manager = database_manager
-        self.actiwell_api = actiwell_api
-        self.measurement_service = MeasurementService(database_manager)
-        self.sync_service = SyncService(database_manager, actiwell_api)
+    def __init__(self, measurement_service: MeasurementService, sync_service: SyncService, config: Dict = None):
+        """
+        Initialize InBody service
         
-        # Initialize InBody handler
-        self.inbody_handler = InBody370sHandler(
-            config=INBODY_CONFIG,
-            database_manager=database_manager
-        )
+        Args:
+            measurement_service: Common measurement processing service
+            sync_service: Common sync service
+            config: InBody-specific configuration
+        """
+        self.measurement_service = measurement_service
+        self.sync_service = sync_service
+        self.config = config or {}
         
-        # Register measurement callback
-        self.inbody_handler.add_message_callback(self.process_measurement)
+        # InBody device protocol
+        self.inbody_protocol: Optional[InBodyProtocol] = None
         
-        # Processing queue
+        # Processing queue for async operations
         self.processing_queue = asyncio.Queue()
         self.is_processing = False
         
-        logger.info("InBody Service initialized")
+        # InBody-specific configuration with safe defaults
+        self.ip_address = self.config.get('ip_address', '192.168.1.100')
+        self.data_port = self.config.get('data_port', 2575)
+        self.listening_port = self.config.get('listening_port', 2580)
+        
+        # Business rules specific to InBody
+        self.auto_sync_enabled = self.config.get('auto_sync_enabled', True)
+        self.quality_threshold = self.config.get('quality_threshold', 'good')
+        
+        # Error tracking
+        self.error_count = 0
+        self.last_error_time = None
+        
+        logger.info(f"InBody Service initialized with config: {self.ip_address}:{self.data_port}")
     
     async def start(self) -> bool:
         """Start InBody integration service"""
         try:
-            # Start InBody handler
-            if not self.inbody_handler.start():
-                logger.error("Failed to start InBody handler")
+            logger.info("Starting InBody integration service...")
+            
+            # Validate configuration first
+            if not self._validate_configuration():
+                logger.error("InBody configuration validation failed")
+                return False
+            
+            # Initialize InBody protocol
+            self.inbody_protocol = InBodyProtocol(
+                ip_address=self.ip_address,
+                data_port=self.data_port,
+                listening_port=self.listening_port
+            )
+            
+            # Set up measurement callback with error handling
+            self.inbody_protocol.set_callbacks(
+                measurement_cb=self._handle_measurement_safe,
+                status_cb=self._handle_status,
+                error_cb=self._handle_error
+            )
+            
+            # Start protocol handler
+            if not self.inbody_protocol.connect():
+                logger.error("Failed to start InBody protocol handler")
                 return False
             
             # Start processing worker
@@ -62,33 +109,304 @@ class InBodyService:
             
         except Exception as e:
             logger.error(f"Failed to start InBody Service: {e}")
+            self._increment_error_count()
             return False
     
     async def stop(self):
         """Stop InBody integration service"""
-        self.is_processing = False
-        self.inbody_handler.stop()
-        logger.info("InBody Service stopped")
-    
-    def process_measurement(self, measurement: InBodyMeasurement):
-        """Process incoming measurement from InBody device"""
         try:
-            logger.info(f"Processing measurement for customer: {measurement.phone_number}")
+            logger.info("Stopping InBody integration service...")
+            self.is_processing = False
+            
+            if self.inbody_protocol:
+                self.inbody_protocol.disconnect()
+                self.inbody_protocol = None
+            
+            # Clear processing queue
+            while not self.processing_queue.empty():
+                try:
+                    self.processing_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            
+            logger.info("InBody Service stopped")
+            
+        except Exception as e:
+            logger.error(f"Error stopping InBody Service: {e}")
+    
+    def _validate_configuration(self) -> bool:
+        """Validate InBody configuration"""
+        try:
+            # Check required fields
+            if not self.ip_address:
+                logger.error("InBody IP address not configured")
+                return False
+            
+            if not (1024 <= self.data_port <= 65535):
+                logger.error(f"Invalid InBody data port: {self.data_port}")
+                return False
+            
+            if not (1024 <= self.listening_port <= 65535):
+                logger.error(f"Invalid InBody listening port: {self.listening_port}")
+                return False
+            
+            if self.data_port == self.listening_port:
+                logger.error("Data port and listening port cannot be the same")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating InBody configuration: {e}")
+            return False
+    
+    def _handle_measurement_safe(self, measurement: MeasurementData):
+        """Safe wrapper for measurement handling"""
+        try:
+            self._handle_measurement(measurement)
+        except Exception as e:
+            logger.error(f"Error in measurement handler: {e}")
+            self._increment_error_count()
+    
+    def _handle_measurement(self, measurement: MeasurementData):
+        """Handle measurement from InBody device"""
+        try:
+            if measurement is None:
+                logger.warning("Received None measurement data")
+                return
+            
+            customer_phone = getattr(measurement, 'customer_phone', 'Unknown')
+            logger.info(f"InBody measurement received for customer: {customer_phone}")
+            
+            # Apply InBody-specific business rules
+            self._apply_inbody_business_rules(measurement)
             
             # Add to processing queue
             asyncio.create_task(self._queue_measurement(measurement))
             
         except Exception as e:
-            logger.error(f"Error processing measurement: {e}")
+            logger.error(f"Error handling InBody measurement: {e}")
+            self._increment_error_count()
     
-    async def _queue_measurement(self, measurement: InBodyMeasurement):
-        """Add measurement to processing queue"""
-        await self.processing_queue.put(measurement)
-        logger.debug("Measurement added to processing queue")
+    def _handle_status(self, device_id: str, status: str):
+        """Handle device status updates"""
+        try:
+            logger.info(f"InBody device status: {device_id} -> {status}")
+            
+            # Reset error count on successful status update
+            if status in ['connected', 'ready', 'measuring']:
+                self.error_count = 0
+                
+        except Exception as e:
+            logger.error(f"Error handling status update: {e}")
+    
+    def _handle_error(self, device_id: str, error: str):
+        """Handle device errors"""
+        try:
+            logger.error(f"InBody device error: {device_id} -> {error}")
+            self._increment_error_count()
+            
+        except Exception as e:
+            logger.error(f"Error in error handler: {e}")
+    
+    def _apply_inbody_business_rules(self, measurement: MeasurementData):
+        """Apply InBody-specific business rules - Fixed version"""
+        try:
+            if measurement is None:
+                logger.warning("Cannot apply business rules to None measurement")
+                return
+            
+            # InBody quality assessment (Fixed: Check None first)
+            current_quality = getattr(measurement, 'measurement_quality', None)
+            if current_quality is None or current_quality == '':
+                measurement.measurement_quality = self._assess_inbody_quality(measurement)
+                logger.debug(f"Assigned quality: {measurement.measurement_quality}")
+            
+            # InBody-specific validations
+            self._validate_inbody_measurement(measurement)
+            
+            # Add InBody-specific processing notes (Fixed: Safe string handling)
+            current_notes = getattr(measurement, 'processing_notes', None)
+            if current_notes:
+                measurement.processing_notes = f"{current_notes}; InBody HL7 processed"
+            else:
+                measurement.processing_notes = "InBody HL7 processed"
+            
+            # Add timestamp if missing
+            if not hasattr(measurement, 'processed_at') or measurement.processed_at is None:
+                measurement.processed_at = datetime.now()
+            
+            logger.debug("InBody business rules applied successfully")
+            
+        except Exception as e:
+            logger.error(f"Error applying InBody business rules: {e}")
+            # Don't raise exception, continue processing with warnings
+            if hasattr(measurement, 'processing_notes'):
+                measurement.processing_notes = f"{getattr(measurement, 'processing_notes', '')}; Warning: Business rules error"
+    
+    def _assess_inbody_quality(self, measurement: MeasurementData) -> str:
+        """Assess measurement quality for InBody devices - Fixed version"""
+        try:
+            if measurement is None:
+                return "unknown"
+            
+            # InBody-specific quality criteria
+            quality_score = 0
+            
+            # Check basic data completeness (Fixed: Safe attribute access)
+            weight_kg = getattr(measurement, 'weight_kg', None)
+            if weight_kg and float(weight_kg) > 0:
+                quality_score += 1
+            
+            muscle_mass_kg = getattr(measurement, 'muscle_mass_kg', None)
+            if muscle_mass_kg and float(muscle_mass_kg) > 0:
+                quality_score += 1
+            
+            total_body_water_kg = getattr(measurement, 'total_body_water_kg', None)
+            if total_body_water_kg and float(total_body_water_kg) > 0:
+                quality_score += 1
+            
+            # Check segmental data (InBody specialty) - Fixed: Safe access
+            segmental_count = 0
+            segmental_attributes = [
+                'right_leg_muscle_kg', 'left_leg_muscle_kg', 
+                'right_arm_muscle_kg', 'left_arm_muscle_kg', 'trunk_muscle_kg'
+            ]
+            
+            for attr in segmental_attributes:
+                value = getattr(measurement, attr, None)
+                if value is not None and float(value) > 0:
+                    segmental_count += 1
+            
+            if segmental_count >= 3:
+                quality_score += 2
+            elif segmental_count >= 1:
+                quality_score += 1
+            
+            # Check impedance data (Fixed: Safe access)
+            impedance_50khz = getattr(measurement, 'impedance_50khz', None)
+            if impedance_50khz and float(impedance_50khz) > 0:
+                quality_score += 1
+            
+            # Check customer identification
+            customer_phone = getattr(measurement, 'customer_phone', None)
+            if customer_phone and len(str(customer_phone).strip()) >= 10:
+                quality_score += 1
+            
+            # Determine quality level
+            if quality_score >= 6:
+                return "excellent"
+            elif quality_score >= 4:
+                return "good"
+            elif quality_score >= 2:
+                return "fair"
+            else:
+                return "poor"
+                
+        except Exception as e:
+            logger.error(f"Error assessing InBody quality: {e}")
+            return "error"
+    
+    def _validate_inbody_measurement(self, measurement: MeasurementData):
+        """Validate InBody-specific measurement criteria - Fixed version"""
+        try:
+            if measurement is None:
+                return
+            
+            errors = []
+            
+            # Initialize validation_errors if not exists
+            if not hasattr(measurement, 'validation_errors'):
+                measurement.validation_errors = []
+            
+            # InBody-specific validation rules (Fixed: Safe numeric conversion)
+            muscle_mass_kg = getattr(measurement, 'muscle_mass_kg', None)
+            weight_kg = getattr(measurement, 'weight_kg', None)
+            
+            if muscle_mass_kg and weight_kg:
+                try:
+                    muscle_ratio = float(muscle_mass_kg) / float(weight_kg)
+                    if muscle_ratio > 0.8:  # Unrealistic muscle ratio
+                        errors.append("Muscle mass ratio too high (>80%)")
+                    elif muscle_ratio < 0.1:  # Too low muscle ratio
+                        errors.append("Muscle mass ratio too low (<10%)")
+                except (ValueError, ZeroDivisionError) as e:
+                    errors.append(f"Invalid muscle/weight ratio calculation: {e}")
+            
+            # Check segmental balance (InBody feature) - Fixed: Safe access
+            right_leg = getattr(measurement, 'right_leg_muscle_kg', None)
+            left_leg = getattr(measurement, 'left_leg_muscle_kg', None)
+            
+            if right_leg and left_leg:
+                try:
+                    leg_difference = abs(float(right_leg) - float(left_leg))
+                    if leg_difference > 2.0:  # >2kg difference
+                        errors.append("Significant leg muscle imbalance detected (>2kg difference)")
+                except ValueError as e:
+                    errors.append(f"Invalid leg muscle data: {e}")
+            
+            # Check reasonable weight range
+            if weight_kg:
+                try:
+                    weight_value = float(weight_kg)
+                    if weight_value < 10 or weight_value > 300:
+                        errors.append(f"Weight out of reasonable range: {weight_value}kg")
+                except ValueError:
+                    errors.append("Invalid weight value")
+            
+            # Phone number validation
+            customer_phone = getattr(measurement, 'customer_phone', None)
+            if customer_phone:
+                phone_str = str(customer_phone).strip()
+                if len(phone_str) < 10:
+                    errors.append("Customer phone number too short")
+                elif not phone_str.isdigit() and not phone_str.startswith('+'):
+                    errors.append("Invalid customer phone number format")
+            
+            # Add validation errors to measurement (Fixed: Safe list handling)
+            if errors:
+                if isinstance(measurement.validation_errors, list):
+                    measurement.validation_errors.extend(errors)
+                else:
+                    measurement.validation_errors = errors
+                
+                logger.warning(f"InBody validation errors: {errors}")
+            
+        except Exception as e:
+            logger.error(f"Error validating InBody measurement: {e}")
+            # Add error to validation_errors if possible
+            try:
+                if hasattr(measurement, 'validation_errors'):
+                    if isinstance(measurement.validation_errors, list):
+                        measurement.validation_errors.append(f"Validation process error: {str(e)}")
+            except:
+                pass
+    
+    async def _queue_measurement(self, measurement: MeasurementData):
+        """Add measurement to processing queue - Fixed version"""
+        try:
+            if measurement is None:
+                logger.warning("Cannot queue None measurement")
+                return
+            
+            # Check queue size limit
+            if self.processing_queue.qsize() >= 100:  # Prevent memory issues
+                logger.warning("Processing queue full, dropping oldest measurement")
+                try:
+                    self.processing_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            
+            await self.processing_queue.put(measurement)
+            logger.debug("InBody measurement queued for processing")
+            
+        except Exception as e:
+            logger.error(f"Error queuing measurement: {e}")
     
     async def _processing_worker(self):
-        """Background worker for processing measurements"""
+        """Background worker for processing InBody measurements - Fixed version"""
         logger.info("InBody processing worker started")
+        consecutive_errors = 0
         
         while self.is_processing:
             try:
@@ -98,455 +416,327 @@ class InBodyService:
                     timeout=1.0
                 )
                 
-                # Process measurement
-                await self._process_measurement_async(measurement)
+                if measurement is None:
+                    logger.warning("Received None measurement in processing worker")
+                    continue
+                
+                # Process measurement through common service
+                success = await self.measurement_service.process_measurement_async(
+                    measurement, 
+                    device_type='inbody'
+                )
+                
+                if success:
+                    consecutive_errors = 0  # Reset error counter
+                    
+                    if self.auto_sync_enabled:
+                        # Sync to external systems if enabled
+                        try:
+                            await self.sync_service.sync_measurement_async(
+                                measurement,
+                                device_type='inbody'
+                            )
+                        except Exception as sync_error:
+                            logger.error(f"Sync error (continuing): {sync_error}")
+                else:
+                    consecutive_errors += 1
+                    logger.warning(f"Measurement processing failed (consecutive errors: {consecutive_errors})")
+                
+                # If too many consecutive errors, slow down processing
+                if consecutive_errors >= 5:
+                    logger.warning("Too many processing errors, slowing down worker")
+                    await asyncio.sleep(5)
+                    consecutive_errors = 0  # Reset after cooldown
                 
             except asyncio.TimeoutError:
                 # No measurement in queue, continue
                 continue
             except Exception as e:
-                logger.error(f"Processing worker error: {e}")
+                consecutive_errors += 1
+                logger.error(f"InBody processing worker error: {e}")
+                
+                if consecutive_errors >= 10:
+                    logger.error("Too many worker errors, stopping processing")
+                    break
+                
                 await asyncio.sleep(1)
         
         logger.info("InBody processing worker stopped")
     
-    async def _process_measurement_async(self, measurement: InBodyMeasurement):
-        """Asynchronously process a single measurement"""
-        try:
-            logger.info(f"Processing measurement: {measurement.measurement_id}")
-            
-            # Step 1: Validate measurement
-            if not self._validate_measurement(measurement):
-                logger.warning("Measurement validation failed")
-                return
-            
-            # Step 2: Customer lookup
-            customer_info = await self._lookup_customer(measurement.phone_number)
-            
-            if not customer_info:
-                logger.warning(f"Customer not found for phone: {measurement.phone_number}")
-                # Create pending customer entry
-                customer_info = await self._create_pending_customer(measurement)
-            
-            # Step 3: Save measurement to database
-            measurement_id = await self._save_measurement_to_db(measurement, customer_info)
-            
-            if not measurement_id:
-                logger.error("Failed to save measurement to database")
-                return
-            
-            # Step 4: Sync to Actiwell (if configured)
-            if ACTIWELL_CONFIG.get('send_to_actiwell', True):
-                await self._sync_to_actiwell(measurement_id, measurement, customer_info)
-            
-            # Step 5: Generate reports and notifications
-            await self._post_processing(measurement_id, measurement, customer_info)
-            
-            logger.info(f"Successfully processed measurement {measurement_id}")
-            
-        except Exception as e:
-            logger.error(f"Error in async measurement processing: {e}")
+    def _increment_error_count(self):
+        """Track error count for monitoring"""
+        self.error_count += 1
+        self.last_error_time = datetime.now()
+        
+        if self.error_count > 50:  # Reset after too many errors
+            logger.warning(f"Error count reset after reaching {self.error_count}")
+            self.error_count = 0
     
-    def _validate_measurement(self, measurement: InBodyMeasurement) -> bool:
-        """Validate measurement data"""
-        # Check required fields
-        if not measurement.phone_number:
-            logger.error("Missing phone number")
-            return False
-        
-        if not measurement.weight_kg or measurement.weight_kg <= 0:
-            logger.error("Invalid weight value")
-            return False
-        
-        # Phone number format validation
-        import re
-        phone_pattern = r'^0[2-9][0-9]{8}$'
-        if not re.match(phone_pattern, measurement.phone_number):
-            logger.error(f"Invalid phone format: {measurement.phone_number}")
-            return False
-        
-        # Reasonable value ranges
-        if measurement.weight_kg and (measurement.weight_kg < 20 or measurement.weight_kg > 300):
-            logger.warning(f"Weight outside normal range: {measurement.weight_kg}kg")
-        
-        if measurement.height_cm and (measurement.height_cm < 100 or measurement.height_cm > 250):
-            logger.warning(f"Height outside normal range: {measurement.height_cm}cm")
-        
-        return True
-    
-    async def _lookup_customer(self, phone_number: str) -> Optional[Dict]:
-        """Lookup customer in Actiwell system"""
+    async def get_measurement_statistics(self, phone_number: str, days: int = 30) -> Dict:
+        """Get InBody-specific measurement statistics - Fixed version"""
         try:
-            # First check local database
-            local_customer = await self.database_manager.get_customer_by_phone(phone_number)
+            if not phone_number or not isinstance(phone_number, str):
+                return {'error': 'Invalid phone number provided'}
             
-            if local_customer and local_customer.get('actiwell_customer_id'):
-                logger.debug(f"Found customer in local database: {phone_number}")
-                return local_customer
-            
-            # Query Actiwell API
-            actiwell_customer = await self.actiwell_api.search_customer_by_phone(
-                phone_number,
-                location_id=ACTIWELL_CONFIG.get('location_id', 1),
-                operator_id=ACTIWELL_CONFIG.get('operator_id', 1)
+            # Get measurements through common service
+            measurements = await self.measurement_service.get_customer_measurements(
+                phone_number.strip(), 
+                days, 
+                device_type='inbody'
             )
-            
-            if actiwell_customer:
-                logger.info(f"Found customer in Actiwell: {phone_number}")
-                
-                # Update local database
-                await self.database_manager.update_customer(phone_number, actiwell_customer)
-                
-                return actiwell_customer
-            
-            logger.info(f"Customer not found: {phone_number}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error looking up customer {phone_number}: {e}")
-            return None
-    
-    async def _create_pending_customer(self, measurement: InBodyMeasurement) -> Dict:
-        """Create pending customer entry for unknown phone numbers"""
-        try:
-            customer_data = {
-                'phone': measurement.phone_number,
-                'name': measurement.patient_name or 'Unknown Customer',
-                'gender': measurement.gender,
-                'age': measurement.age,
-                'status': 'pending_verification',
-                'created_from': 'inbody_measurement',
-                'first_measurement_date': measurement.measurement_timestamp
-            }
-            
-            customer_id = await self.database_manager.create_customer(customer_data)
-            
-            if customer_id:
-                logger.info(f"Created pending customer: {measurement.phone_number}")
-                customer_data['id'] = customer_id
-                return customer_data
-            
-            return {}
-            
-        except Exception as e:
-            logger.error(f"Error creating pending customer: {e}")
-            return {}
-    
-    async def _save_measurement_to_db(self, measurement: InBodyMeasurement, customer_info: Dict) -> Optional[int]:
-        """Save measurement to local database"""
-        try:
-            # Convert measurement to database format
-            measurement_data = {
-                'device_id': measurement.device_id,
-                'customer_id': customer_info.get('id'),
-                'extracted_phone_number': measurement.phone_number,
-                'patient_id': measurement.patient_id,
-                'measurement_timestamp': measurement.measurement_timestamp,
-                
-                # Basic measurements
-                'height_cm': measurement.height_cm,
-                'weight_kg': measurement.weight_kg,
-                'bmi': measurement.bmi,
-                
-                # Body composition
-                'body_fat_percent': measurement.body_fat_percent,
-                'body_fat_mass_kg': measurement.body_fat_mass_kg,
-                'skeletal_muscle_mass_kg': measurement.skeletal_muscle_mass_kg,
-                'fat_free_mass_kg': measurement.fat_free_mass_kg,
-                'total_body_water_kg': measurement.total_body_water_kg,
-                'total_body_water_percent': measurement.total_body_water_percent,
-                'protein_mass_kg': measurement.protein_mass_kg,
-                'mineral_mass_kg': measurement.mineral_mass_kg,
-                
-                # Advanced metrics
-                'visceral_fat_area_cm2': measurement.visceral_fat_area_cm2,
-                'visceral_fat_level': measurement.visceral_fat_level,
-                'basal_metabolic_rate_kcal': measurement.basal_metabolic_rate_kcal,
-                
-                # Segmental analysis
-                'right_leg_lean_mass_kg': measurement.right_leg_lean_mass_kg,
-                'left_leg_lean_mass_kg': measurement.left_leg_lean_mass_kg,
-                'right_arm_lean_mass_kg': measurement.right_arm_lean_mass_kg,
-                'left_arm_lean_mass_kg': measurement.left_arm_lean_mass_kg,
-                'trunk_lean_mass_kg': measurement.trunk_lean_mass_kg,
-                
-                # Bioelectrical impedance
-                'impedance_50khz_whole_body': measurement.impedance_50khz,
-                'impedance_250khz_whole_body': measurement.impedance_250khz,
-                'impedance_500khz_whole_body': measurement.impedance_500khz,
-                'impedance_1000khz_whole_body': measurement.impedance_1000khz,
-                
-                # Phase angle
-                'phase_angle_whole_body': measurement.phase_angle_whole_body,
-                
-                # Quality and metadata
-                'measurement_quality': measurement.measurement_quality,
-                'contact_quality': json.dumps(measurement.contact_quality),
-                'hl7_message_type': measurement.hl7_message_type,
-                'raw_hl7_message': measurement.raw_hl7_message,
-                
-                # Processing status
-                'synced_to_actiwell': False,
-                'sync_attempts': 0
-            }
-            
-            measurement_id = await self.database_manager.save_inbody_measurement(measurement_data)
-            
-            if measurement_id:
-                logger.info(f"Saved measurement to database: ID {measurement_id}")
-                return measurement_id
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error saving measurement to database: {e}")
-            return None
-    
-    async def _sync_to_actiwell(self, measurement_id: int, measurement: InBodyMeasurement, customer_info: Dict):
-        """Sync measurement to Actiwell platform"""
-        try:
-            if not customer_info.get('actiwell_customer_id'):
-                logger.warning(f"No Actiwell customer ID for {measurement.phone_number}")
-                return
-            
-            # Prepare data for Actiwell API
-            actiwell_data = {
-                'customer_id': customer_info['actiwell_customer_id'],
-                'activity_type': 5,  # Body composition measurement
-                'location_id': ACTIWELL_CONFIG.get('location_id', 1),
-                'operator_id': ACTIWELL_CONFIG.get('operator_id', 1),
-                'measurement_timestamp': measurement.measurement_timestamp.isoformat(),
-                'device_type': 'inbody_370s',
-                'data': {
-                    'basic_measurements': {
-                        'weight_kg': measurement.weight_kg,
-                        'height_cm': measurement.height_cm,
-                        'bmi': measurement.bmi
-                    },
-                    'body_composition': {
-                        'body_fat_percent': measurement.body_fat_percent,
-                        'skeletal_muscle_mass_kg': measurement.skeletal_muscle_mass_kg,
-                        'visceral_fat_area_cm2': measurement.visceral_fat_area_cm2,
-                        'basal_metabolic_rate_kcal': measurement.basal_metabolic_rate_kcal
-                    },
-                    'segmental_analysis': {
-                        'right_leg_lean_mass_kg': measurement.right_leg_lean_mass_kg,
-                        'left_leg_lean_mass_kg': measurement.left_leg_lean_mass_kg,
-                        'right_arm_lean_mass_kg': measurement.right_arm_lean_mass_kg,
-                        'left_arm_lean_mass_kg': measurement.left_arm_lean_mass_kg,
-                        'trunk_lean_mass_kg': measurement.trunk_lean_mass_kg
-                    },
-                    'bioelectrical_impedance': {
-                        'impedance_50khz': measurement.impedance_50khz,
-                        'phase_angle_whole_body': measurement.phase_angle_whole_body
-                    }
-                },
-                'raw_data': measurement.raw_hl7_message
-            }
-            
-            # Send to Actiwell
-            result = await self.actiwell_api.save_body_composition(actiwell_data)
-            
-            if result and result.get('success'):
-                # Update sync status
-                await self.database_manager.update_measurement_sync_status(
-                    measurement_id,
-                    actiwell_measurement_id=result.get('measurement_id'),
-                    success=True
-                )
-                logger.info(f"Successfully synced measurement {measurement_id} to Actiwell")
-            else:
-                # Mark sync failed
-                await self.database_manager.update_measurement_sync_status(
-                    measurement_id,
-                    success=False,
-                    error_message=result.get('error', 'Unknown sync error')
-                )
-                logger.error(f"Failed to sync measurement {measurement_id} to Actiwell")
-                
-        except Exception as e:
-            logger.error(f"Error syncing to Actiwell: {e}")
-            # Mark sync failed
-            await self.database_manager.update_measurement_sync_status(
-                measurement_id,
-                success=False,
-                error_message=str(e)
-            )
-    
-    async def _post_processing(self, measurement_id: int, measurement: InBodyMeasurement, customer_info: Dict):
-        """Post-processing tasks after measurement is saved"""
-        try:
-            # Generate measurement report
-            await self._generate_measurement_report(measurement_id, measurement, customer_info)
-            
-            # Update customer analytics
-            await self._update_customer_analytics(customer_info.get('id'), measurement)
-            
-            # Check for health alerts
-            await self._check_health_alerts(measurement, customer_info)
-            
-        except Exception as e:
-            logger.error(f"Error in post-processing: {e}")
-    
-    async def _generate_measurement_report(self, measurement_id: int, measurement: InBodyMeasurement, customer_info: Dict):
-        """Generate measurement report"""
-        try:
-            # Create summary report
-            report = {
-                'measurement_id': measurement_id,
-                'customer_phone': measurement.phone_number,
-                'customer_name': customer_info.get('name', 'Unknown'),
-                'measurement_date': measurement.measurement_timestamp.isoformat(),
-                'summary': {
-                    'weight_kg': measurement.weight_kg,
-                    'bmi': measurement.bmi,
-                    'body_fat_percent': measurement.body_fat_percent,
-                    'muscle_mass_kg': measurement.skeletal_muscle_mass_kg,
-                    'metabolic_rate_kcal': measurement.basal_metabolic_rate_kcal
-                },
-                'device_info': {
-                    'model': measurement.device_model,
-                    'measurement_quality': measurement.measurement_quality
-                }
-            }
-            
-            # Save report
-            await self.database_manager.save_measurement_report(measurement_id, report)
-            
-            logger.debug(f"Generated report for measurement {measurement_id}")
-            
-        except Exception as e:
-            logger.error(f"Error generating report: {e}")
-    
-    async def _update_customer_analytics(self, customer_id: Optional[int], measurement: InBodyMeasurement):
-        """Update customer analytics and trends"""
-        if not customer_id:
-            return
-        
-        try:
-            # Calculate trends and analytics
-            analytics_data = {
-                'customer_id': customer_id,
-                'analysis_date': measurement.measurement_timestamp.date(),
-                'measurement_count': 1,
-                'avg_weight_kg': measurement.weight_kg,
-                'avg_body_fat_percent': measurement.body_fat_percent,
-                'avg_muscle_mass_kg': measurement.skeletal_muscle_mass_kg,
-                'avg_metabolic_rate_kcal': measurement.basal_metabolic_rate_kcal
-            }
-            
-            await self.database_manager.update_customer_analytics(analytics_data)
-            
-            logger.debug(f"Updated analytics for customer {customer_id}")
-            
-        except Exception as e:
-            logger.error(f"Error updating customer analytics: {e}")
-    
-    async def _check_health_alerts(self, measurement: InBodyMeasurement, customer_info: Dict):
-        """Check for health alerts based on measurement values"""
-        try:
-            alerts = []
-            
-            # BMI alerts
-            if measurement.bmi:
-                if measurement.bmi < 18.5:
-                    alerts.append("BMI below normal range (underweight)")
-                elif measurement.bmi > 30:
-                    alerts.append("BMI above normal range (obese)")
-                elif measurement.bmi > 25:
-                    alerts.append("BMI above normal range (overweight)")
-            
-            # Body fat alerts
-            if measurement.body_fat_percent:
-                gender = customer_info.get('gender', 'M')
-                if gender == 'M' and measurement.body_fat_percent > 25:
-                    alerts.append("Body fat percentage high for males")
-                elif gender == 'F' and measurement.body_fat_percent > 32:
-                    alerts.append("Body fat percentage high for females")
-            
-            # Visceral fat alerts
-            if measurement.visceral_fat_area_cm2 and measurement.visceral_fat_area_cm2 > 100:
-                alerts.append("Visceral fat area elevated - health risk")
-            
-            # Log alerts
-            if alerts:
-                logger.info(f"Health alerts for {measurement.phone_number}: {', '.join(alerts)}")
-                
-                # Save alerts to database
-                await self.database_manager.save_health_alerts(
-                    customer_info.get('id'),
-                    alerts,
-                    measurement.measurement_timestamp
-                )
-            
-        except Exception as e:
-            logger.error(f"Error checking health alerts: {e}")
-    
-    async def get_measurement_stats(self, phone_number: str, days: int = 30) -> Dict:
-        """Get measurement statistics for a customer"""
-        try:
-            measurements = await self.database_manager.get_customer_measurements(phone_number, days)
             
             if not measurements:
-                return {'error': 'No measurements found'}
+                return {'error': 'No InBody measurements found', 'phone_number': phone_number}
             
-            # Calculate statistics
+            # Calculate InBody-specific statistics
+            stats = await self._calculate_inbody_statistics(measurements)
+            stats['phone_number'] = phone_number
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error getting InBody measurement statistics: {e}")
+            return {'error': str(e), 'phone_number': phone_number}
+    
+    async def _calculate_inbody_statistics(self, measurements: List[Dict]) -> Dict:
+        """Calculate InBody-specific statistics - Fixed version"""
+        try:
+            if not measurements or not isinstance(measurements, list):
+                return {'error': 'No valid measurements provided'}
+            
+            # Basic statistics
+            total_measurements = len(measurements)
+            latest_measurement = max(measurements, key=lambda x: x.get('measurement_timestamp', datetime.min))
+            
+            # InBody-specific averages (Fixed: Safe value extraction)
+            muscle_mass_values = []
+            water_values = []
+            
+            for m in measurements:
+                if isinstance(m, dict):
+                    muscle_val = m.get('muscle_mass_kg')
+                    if muscle_val is not None and muscle_val > 0:
+                        muscle_mass_values.append(float(muscle_val))
+                    
+                    water_val = m.get('total_body_water_kg')
+                    if water_val is not None and water_val > 0:
+                        water_values.append(float(water_val))
+            
+            # Segmental analysis trends (InBody specialty) - Fixed: Safe calculation
+            segmental_stats = {}
+            segmental_fields = [
+                'right_leg_muscle_kg', 'left_leg_muscle_kg', 
+                'right_arm_muscle_kg', 'left_arm_muscle_kg', 'trunk_muscle_kg'
+            ]
+            
+            for segment in segmental_fields:
+                values = []
+                for m in measurements:
+                    if isinstance(m, dict):
+                        val = m.get(segment)
+                        if val is not None and val > 0:
+                            values.append(float(val))
+                
+                if values:
+                    segmental_stats[segment] = {
+                        'average': round(sum(values) / len(values), 2),
+                        'latest': values[-1] if values else 0,
+                        'trend': self._calculate_trend(values),
+                        'count': len(values)
+                    }
+            
+            # Build statistics dictionary
             stats = {
-                'total_measurements': len(measurements),
+                'total_measurements': total_measurements,
                 'date_range': {
-                    'start': min(m['measurement_timestamp'] for m in measurements).isoformat(),
-                    'end': max(m['measurement_timestamp'] for m in measurements).isoformat()
+                    'start': min(m.get('measurement_timestamp', datetime.now()) for m in measurements).isoformat(),
+                    'end': max(m.get('measurement_timestamp', datetime.now()) for m in measurements).isoformat()
                 },
                 'averages': {
-                    'weight_kg': sum(m['weight_kg'] for m in measurements if m['weight_kg']) / len(measurements),
-                    'body_fat_percent': sum(m['body_fat_percent'] for m in measurements if m['body_fat_percent']) / len(measurements),
-                    'muscle_mass_kg': sum(m['skeletal_muscle_mass_kg'] for m in measurements if m['skeletal_muscle_mass_kg']) / len(measurements)
+                    'muscle_mass_kg': round(sum(muscle_mass_values) / len(muscle_mass_values), 2) if muscle_mass_values else 0,
+                    'total_body_water_kg': round(sum(water_values) / len(water_values), 2) if water_values else 0,
                 },
-                'trends': self._calculate_trends(measurements)
+                'latest_measurement': latest_measurement,
+                'segmental_analysis': segmental_stats,
+                'quality_distribution': self._calculate_quality_distribution(measurements),
+                'device_type': 'inbody',
+                'statistics_generated_at': datetime.now().isoformat()
             }
             
             return stats
             
         except Exception as e:
-            logger.error(f"Error getting measurement stats: {e}")
+            logger.error(f"Error calculating InBody statistics: {e}")
+            return {'error': f'Statistics calculation failed: {str(e)}'}
+    
+    def _calculate_trend(self, values: List[float]) -> str:
+        """Calculate trend for a series of values - Fixed version"""
+        try:
+            if not values or len(values) < 2:
+                return 'insufficient_data'
+            
+            # Simple trend calculation (Fixed: Safe division)
+            mid_point = len(values) // 2
+            if mid_point == 0:
+                return 'insufficient_data'
+            
+            first_half = sum(values[:mid_point]) / mid_point
+            second_half = sum(values[mid_point:]) / (len(values) - mid_point)
+            
+            difference = second_half - first_half
+            
+            if difference > 0.5:
+                return 'increasing'
+            elif difference < -0.5:
+                return 'decreasing'
+            else:
+                return 'stable'
+                
+        except Exception as e:
+            logger.error(f"Error calculating trend: {e}")
+            return 'error'
+    
+    def _calculate_quality_distribution(self, measurements: List[Dict]) -> Dict:
+        """Calculate distribution of measurement quality - Fixed version"""
+        try:
+            if not measurements:
+                return {}
+            
+            quality_counts = {}
+            
+            for measurement in measurements:
+                if isinstance(measurement, dict):
+                    quality = measurement.get('measurement_quality', 'unknown')
+                    quality_counts[quality] = quality_counts.get(quality, 0) + 1
+            
+            total = len(measurements)
+            quality_distribution = {}
+            
+            for quality, count in quality_counts.items():
+                quality_distribution[quality] = {
+                    'count': count,
+                    'percentage': round((count / total) * 100, 1) if total > 0 else 0
+                }
+            
+            return quality_distribution
+            
+        except Exception as e:
+            logger.error(f"Error calculating quality distribution: {e}")
             return {'error': str(e)}
     
-    def _calculate_trends(self, measurements: List[Dict]) -> Dict:
-        """Calculate measurement trends"""
-        if len(measurements) < 2:
-            return {'message': 'Insufficient data for trend analysis'}
-        
-        # Sort by date
-        sorted_measurements = sorted(measurements, key=lambda x: x['measurement_timestamp'])
-        first = sorted_measurements[0]
-        last = sorted_measurements[-1]
-        
-        trends = {}
-        
-        # Weight trend
-        if first.get('weight_kg') and last.get('weight_kg'):
-            weight_change = last['weight_kg'] - first['weight_kg']
-            trends['weight_change_kg'] = round(weight_change, 1)
-            trends['weight_trend'] = 'increasing' if weight_change > 0.5 else 'decreasing' if weight_change < -0.5 else 'stable'
-        
-        # Body fat trend
-        if first.get('body_fat_percent') and last.get('body_fat_percent'):
-            fat_change = last['body_fat_percent'] - first['body_fat_percent']
-            trends['body_fat_change_percent'] = round(fat_change, 1)
-            trends['body_fat_trend'] = 'increasing' if fat_change > 1 else 'decreasing' if fat_change < -1 else 'stable'
-        
-        return trends
-    
     def get_device_status(self) -> Dict:
-        """Get InBody device status"""
-        device_status = self.inbody_handler.get_status()
-        return {
-            'device_id': device_status.device_id,
-            'device_type': device_status.device_type,
-            'status': device_status.status,
-            'connection_type': device_status.connection_type,
-            'last_heartbeat': device_status.last_heartbeat.isoformat() if device_status.last_heartbeat else None,
-            'data_port': self.inbody_handler.data_port,
-            'listening_port': self.inbody_handler.listening_port,
-            'device_ip': self.inbody_handler.device_ip
-        }
+        """Get InBody device status - Fixed version"""
+        try:
+            base_status = {
+                'service_status': 'running' if self.is_processing else 'stopped',
+                'auto_sync_enabled': self.auto_sync_enabled,
+                'quality_threshold': self.quality_threshold,
+                'queue_size': self.processing_queue.qsize() if hasattr(self, 'processing_queue') else 0,
+                'error_count': self.error_count,
+                'last_error_time': self.last_error_time.isoformat() if self.last_error_time else None,
+                'configuration': {
+                    'ip_address': self.ip_address,
+                    'data_port': self.data_port,
+                    'listening_port': self.listening_port
+                }
+            }
+            
+            if self.inbody_protocol:
+                try:
+                    device_info = self.inbody_protocol.get_device_info()
+                    base_status.update(device_info)
+                except Exception as e:
+                    base_status['device_info_error'] = str(e)
+            else:
+                base_status['error'] = 'InBody protocol not initialized'
+            
+            return base_status
+                
+        except Exception as e:
+            logger.error(f"Error getting InBody device status: {e}")
+            return {
+                'error': str(e),
+                'service_status': 'error'
+            }
+    
+    async def trigger_calibration(self) -> Dict:
+        """Trigger InBody device calibration (if supported) - Fixed version"""
+        try:
+            logger.info("InBody calibration check initiated")
+            
+            # InBody devices typically self-calibrate
+            # This is more of a connectivity/status check
+            
+            if self.inbody_protocol and hasattr(self.inbody_protocol, 'is_connected') and self.inbody_protocol.is_connected:
+                return {
+                    'status': 'success',
+                    'message': 'InBody device is connected and ready',
+                    'calibration_required': False,
+                    'note': 'InBody devices self-calibrate automatically',
+                    'timestamp': datetime.now().isoformat()
+                }
+            else:
+                return {
+                    'status': 'error',
+                    'message': 'InBody device not connected',
+                    'calibration_required': True,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+        except Exception as e:
+            logger.error(f"Error checking InBody calibration: {e}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
+    
+    async def get_device_capabilities(self) -> Dict:
+        """Get InBody device capabilities - Fixed version"""
+        try:
+            base_capabilities = {
+                'hl7_support': True,
+                'network_connection': True,
+                'real_time_monitoring': True,
+                'segmental_analysis_regions': 5,
+                'measurement_frequencies': ['5kHz', '50kHz', '250kHz'],
+                'supported_protocols': ['HL7 v2.5', 'TCP/IP'],
+                'data_export_formats': ['HL7', 'CSV', 'JSON'],
+                'auto_calibration': True,
+                'quality_assessment': True
+            }
+            
+            if self.inbody_protocol and hasattr(self.inbody_protocol, 'capabilities'):
+                try:
+                    device_capabilities = self.inbody_protocol.capabilities.__dict__
+                    base_capabilities.update(device_capabilities)
+                except Exception as e:
+                    base_capabilities['capabilities_error'] = str(e)
+            
+            return base_capabilities
+                
+        except Exception as e:
+            logger.error(f"Error getting InBody capabilities: {e}")
+            return {'error': str(e)}
+    
+    def get_service_health(self) -> Dict:
+        """Get service health information"""
+        try:
+            return {
+                'service_name': 'InBodyService',
+                'status': 'healthy' if self.is_processing and self.error_count < 10 else 'unhealthy',
+                'uptime_status': 'running' if self.is_processing else 'stopped',
+                'error_count': self.error_count,
+                'queue_size': self.processing_queue.qsize() if hasattr(self, 'processing_queue') else 0,
+                'last_error_time': self.last_error_time.isoformat() if self.last_error_time else None,
+                'configuration_valid': self._validate_configuration(),
+                'timestamp': datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error getting service health: {e}")
+            return {
+                'service_name': 'InBodyService',
+                'status': 'error',
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }

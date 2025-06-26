@@ -2,6 +2,7 @@
 """
 Configuration Management for Actiwell InBody Integration
 Professional configuration system with environment variable support
+Fixed version with compatibility for test scripts
 """
 
 import os
@@ -23,7 +24,7 @@ class Config:
     WEB_HOST = os.getenv('WEB_HOST', '0.0.0.0')
     FLASK_DEBUG = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     
-    # Database Configuration
+    # Database Configuration (Fixed env var names)
     DB_HOST = os.getenv('DB_HOST', 'localhost')
     DB_USER = os.getenv('DB_USER', 'actiwell_user')
     DB_PASSWORD = os.getenv('DB_PASSWORD', 'your_secure_password')
@@ -31,13 +32,15 @@ class Config:
     DB_PORT = int(os.getenv('DB_PORT', '3306'))
     DB_POOL_SIZE = int(os.getenv('DB_POOL_SIZE', '5'))
     
-    # InBody Device Configuration
+    # InBody Device Configuration (Fixed to match test scripts)
     INBODY_DEVICE_MODEL = os.getenv('INBODY_DEVICE_MODEL', 'InBody-370s')
-    INBODY_DEVICE_IP = os.getenv('INBODY_DEVICE_IP', '192.168.1.100')
+    INBODY_IP = os.getenv('INBODY_IP', '192.168.1.100')  # Fixed env var name
+    INBODY_DEVICE_IP = INBODY_IP  # Backward compatibility
     INBODY_LISTENING_PORT = int(os.getenv('INBODY_LISTENING_PORT', '2580'))
     INBODY_DATA_PORT = int(os.getenv('INBODY_DATA_PORT', '2575'))
     INBODY_TIMEOUT = int(os.getenv('INBODY_TIMEOUT', '30'))
     INBODY_MAX_CONNECTIONS = int(os.getenv('INBODY_MAX_CONNECTIONS', '10'))
+    INBODY_ENABLED = os.getenv('INBODY_ENABLED', 'true').lower() == 'true'
     
     # HL7 Configuration
     HL7_VERSION = os.getenv('HL7_VERSION', '2.5')
@@ -110,14 +113,16 @@ class Config:
     
     @classmethod
     def get_inbody_config(cls) -> Dict[str, Any]:
-        """Get InBody device configuration"""
+        """Get InBody device configuration - Fixed for test compatibility"""
         return {
             'model': cls.INBODY_DEVICE_MODEL,
-            'device_ip': cls.INBODY_DEVICE_IP,
+            'ip_address': cls.INBODY_IP,  # Fixed key name for test scripts
+            'device_ip': cls.INBODY_IP,   # Backward compatibility
             'listening_port': cls.INBODY_LISTENING_PORT,
             'data_port': cls.INBODY_DATA_PORT,
             'timeout': cls.INBODY_TIMEOUT,
-            'max_connections': cls.INBODY_MAX_CONNECTIONS
+            'max_connections': cls.INBODY_MAX_CONNECTIONS,
+            'enabled': cls.INBODY_ENABLED
         }
     
     @classmethod
@@ -158,7 +163,7 @@ class Config:
         
         # Check InBody device settings
         validation_results['inbody_configured'] = bool(
-            cls.INBODY_DEVICE_IP and cls.INBODY_LISTENING_PORT and cls.INBODY_DATA_PORT
+            cls.INBODY_IP and cls.INBODY_LISTENING_PORT and cls.INBODY_DATA_PORT
         )
         
         # Check required directories
@@ -268,8 +273,13 @@ config = ConfigManager.get_config()
 config.init_directories()
 ConfigManager.setup_logging(config)
 
-# Export commonly used configurations
+# Export commonly used configurations (Fixed for test script compatibility)
 DATABASE_CONFIG = config.get_database_config()
-INBODY_CONFIG = config.get_inbody_config()
+INBODY_CONFIG = config.get_inbody_config()  # Fixed: Now available at module level
 HL7_CONFIG = config.get_hl7_config()
 ACTIWELL_CONFIG = config.get_actiwell_config()
+
+# Additional exports for backward compatibility and test scripts
+PI_IP = os.getenv('PI_IP', '192.168.1.50')
+DATA_PORT = INBODY_CONFIG['data_port']
+LISTENING_PORT = INBODY_CONFIG['listening_port']

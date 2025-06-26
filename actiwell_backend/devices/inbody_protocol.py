@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-InBody 370s HL7 Protocol Handler
-Professional implementation for InBody 370s body composition analyzer
-Dual port support: Listening 2580, Data 2575
+InBody Protocol Implementation
+Handles HL7 communication for InBody 270/370s devices
 """
 
 import socket
@@ -14,97 +13,45 @@ import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass
-from abc import ABC, abstractmethod
 
-from .base_protocol import BaseDeviceProtocol, DeviceMessage, DeviceStatus
-from ..core.database_manager import DatabaseManager
-from config import INBODY_CONFIG, HL7_CONFIG
+from .base_protocol import DeviceProtocol, DeviceState, MeasurementStatus, MeasurementData, DeviceCapabilities
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
-class InBodyMeasurement:
-    """InBody 370s measurement data structure"""
-    
-    # Device identification
-    device_id: str
-    device_model: str = "InBody-370s"
-    measurement_id: str = ""
-    
-    # Patient information
-    patient_id: str = ""
-    phone_number: str = ""
-    patient_name: str = ""
-    gender: str = "M"
-    age: Optional[int] = None
-    date_of_birth: Optional[str] = None
-    
-    # Basic measurements
-    height_cm: Optional[float] = None
-    weight_kg: Optional[float] = None
-    bmi: Optional[float] = None
-    
-    # Body composition
-    body_fat_percent: Optional[float] = None
-    body_fat_mass_kg: Optional[float] = None
-    skeletal_muscle_mass_kg: Optional[float] = None
-    fat_free_mass_kg: Optional[float] = None
-    total_body_water_kg: Optional[float] = None
-    total_body_water_percent: Optional[float] = None
-    protein_mass_kg: Optional[float] = None
-    mineral_mass_kg: Optional[float] = None
-    
-    # Advanced metrics
-    visceral_fat_area_cm2: Optional[float] = None
-    visceral_fat_level: Optional[int] = None
-    basal_metabolic_rate_kcal: Optional[int] = None
-    
-    # Segmental analysis (InBody 370s specialty)
-    right_leg_lean_mass_kg: Optional[float] = None
-    left_leg_lean_mass_kg: Optional[float] = None
-    right_arm_lean_mass_kg: Optional[float] = None
-    left_arm_lean_mass_kg: Optional[float] = None
-    trunk_lean_mass_kg: Optional[float] = None
-    
-    # Bioelectrical impedance
-    impedance_1khz: Optional[float] = None
-    impedance_5khz: Optional[float] = None
-    impedance_50khz: Optional[float] = None
-    impedance_250khz: Optional[float] = None
-    impedance_500khz: Optional[float] = None
-    impedance_1000khz: Optional[float] = None
-    
-    # Phase angle
-    phase_angle_50khz: Optional[float] = None
-    phase_angle_whole_body: Optional[float] = None
-    
-    # Quality indicators
-    measurement_quality: str = "good"
-    contact_quality: Dict[str, str] = None
-    
-    # Metadata
-    measurement_timestamp: datetime = None
-    raw_hl7_message: str = ""
-    hl7_message_type: str = "ORU"
+class InBodyCapabilities(DeviceCapabilities):
+    """InBody 270/370s specific capabilities"""
+    model: str = "InBody-270"
+    manufacturer: str = "InBody Co., Ltd."
+    max_weight_kg: float = 250.0
+    min_weight_kg: float = 10.0
+    weight_resolution: float = 0.1
+    measurement_time_seconds: int = 15
+    supported_ages: tuple = (3, 99)
+    supported_heights: tuple = (95, 220)  # cm
+    connectivity: List[str] = None
+    segmental_analysis: bool = True
+    multi_frequency: bool = True
+    visceral_fat: bool = True
+    metabolic_age: bool = False  # Not all InBody models
+    body_water: bool = True
+    muscle_mass: bool = True
+    bone_mass: bool = False  # InBody focuses on lean mass
     
     def __post_init__(self):
-        if self.measurement_timestamp is None:
-            self.measurement_timestamp = datetime.now()
-        if self.contact_quality is None:
-            self.contact_quality = {}
-
+        if self.connectivity is None:
+            self.connectivity = ['RS-232C', 'USB', 'LAN', 'Bluetooth', 'Wi-Fi']
 
 class HL7MessageParser:
-    """HL7 v2.5 message parser for InBody 370s"""
+    """HL7 v2.5 message parser for InBody devices"""
     
     def __init__(self, config: Dict = None):
-        self.config = config or HL7_CONFIG
+        self.config = config or {}
         self.segment_separator = self.config.get('segment_separator', '\r')
         self.field_separator = self.config.get('field_separator', '|')
         
-    def parse_message(self, raw_message: str) -> Optional[InBodyMeasurement]:
-        """Parse HL7 message into InBodyMeasurement object"""
+    def parse_message(self, raw_message: str) -> Optional[MeasurementData]:
+        """Parse HL7 message into standardized MeasurementData object"""
         try:
             logger.debug(f"Parsing HL7 message: {len(raw_message)} characters")
             
@@ -117,11 +64,11 @@ class HL7MessageParser:
                 return None
             
             # Initialize measurement object
-            measurement = InBodyMeasurement(
-                device_id="INBODY-370S-001",
-                raw_hl7_message=raw_message,
-                measurement_timestamp=datetime.now()
-            )
+            measurement = MeasurementData()
+            measurement.device_type = "inbody_270"
+            measurement.device_id = "inbody_001"
+            measurement.raw_data = raw_message
+            measurement.measurement_timestamp = datetime.now()
             
             # Parse each segment
             for segment in segments:
@@ -129,17 +76,19 @@ class HL7MessageParser:
             
             # Validate parsed data
             if self._validate_measurement(measurement):
-                logger.info(f"Successfully parsed measurement for patient: {measurement.phone_number}")
+                logger.info(f"Successfully parsed HL7 measurement for: {measurement.customer_phone}")
+                measurement.status = MeasurementStatus.COMPLETE
                 return measurement
             else:
-                logger.warning("Measurement validation failed")
-                return None
+                logger.warning("HL7 measurement validation failed")
+                measurement.status = MeasurementStatus.ERROR
+                return measurement
                 
         except Exception as e:
             logger.error(f"Error parsing HL7 message: {e}")
             return None
     
-    def _parse_segment(self, segment: str, measurement: InBodyMeasurement):
+    def _parse_segment(self, segment: str, measurement: MeasurementData):
         """Parse individual HL7 segment"""
         if not segment:
             return
@@ -161,11 +110,9 @@ class HL7MessageParser:
         except Exception as e:
             logger.warning(f"Error parsing {segment_type} segment: {e}")
     
-    def _parse_msh_segment(self, fields: List[str], measurement: InBodyMeasurement):
+    def _parse_msh_segment(self, fields: List[str], measurement: MeasurementData):
         """Parse MSH (Message Header) segment"""
         if len(fields) >= 9:
-            measurement.hl7_message_type = fields[8] if len(fields) > 8 else 'ORU'
-            
             # Parse timestamp if available
             if len(fields) > 6 and fields[6]:
                 timestamp_str = fields[6]
@@ -176,23 +123,20 @@ class HL7MessageParser:
             
             # Message ID
             if len(fields) > 9:
-                measurement.measurement_id = fields[9]
+                measurement.measurement_uuid = fields[9]
     
-    def _parse_pid_segment(self, fields: List[str], measurement: InBodyMeasurement):
+    def _parse_pid_segment(self, fields: List[str], measurement: MeasurementData):
         """Parse PID (Patient Identification) segment"""
-        # Patient ID (field 3)
+        # Patient ID (field 3) - extract phone number
         if len(fields) > 2 and fields[2]:
-            measurement.patient_id = fields[2].strip('"')
-            measurement.phone_number = self._extract_phone_number(measurement.patient_id)
+            patient_id = fields[2].strip('"')
+            phone = self._extract_phone_number(patient_id)
+            if phone:
+                measurement.customer_phone = phone
+                measurement.customer_id = phone
         
-        # Patient name (field 5)
-        if len(fields) > 5 and fields[5]:
-            measurement.patient_name = fields[5].strip('"')
-        
-        # Date of birth (field 7)
+        # Date of birth (field 7) - calculate age
         if len(fields) > 7 and fields[7]:
-            measurement.date_of_birth = fields[7]
-            # Calculate age
             try:
                 birth_date = datetime.strptime(fields[7], '%Y%m%d')
                 measurement.age = (datetime.now() - birth_date).days // 365
@@ -203,14 +147,11 @@ class HL7MessageParser:
         if len(fields) > 8 and fields[8]:
             measurement.gender = fields[8].upper()
     
-    def _parse_obr_segment(self, fields: List[str], measurement: InBodyMeasurement):
+    def _parse_obr_segment(self, fields: List[str], measurement: MeasurementData):
         """Parse OBR (Observation Request) segment"""
-        # Observation request details
-        if len(fields) > 4:
-            # Universal Service ID
-            measurement.measurement_id = measurement.measurement_id or fields[2]
+        pass  # Additional metadata if needed
     
-    def _parse_obx_segment(self, fields: List[str], measurement: InBodyMeasurement):
+    def _parse_obx_segment(self, fields: List[str], measurement: MeasurementData):
         """Parse OBX (Observation/Result) segment"""
         if len(fields) < 6:
             return
@@ -226,7 +167,7 @@ class HL7MessageParser:
             logger.debug(f"Non-numeric observation value: {observation_id} = {observation_value}")
             return
         
-        # InBody 370s measurement mapping
+        # InBody measurement mapping (standardized codes)
         measurement_map = {
             # Basic measurements
             'WT': lambda m, v: setattr(m, 'weight_kg', v),
@@ -235,37 +176,25 @@ class HL7MessageParser:
             
             # Body composition
             'PBF': lambda m, v: setattr(m, 'body_fat_percent', v),
-            'BFM': lambda m, v: setattr(m, 'body_fat_mass_kg', v),
-            'SMM': lambda m, v: setattr(m, 'skeletal_muscle_mass_kg', v),
-            'FFM': lambda m, v: setattr(m, 'fat_free_mass_kg', v),
+            'SMM': lambda m, v: setattr(m, 'muscle_mass_kg', v),
             'TBW': lambda m, v: setattr(m, 'total_body_water_kg', v),
             'TBWP': lambda m, v: setattr(m, 'total_body_water_percent', v),
-            'PMM': lambda m, v: setattr(m, 'protein_mass_kg', v),
-            'MM': lambda m, v: setattr(m, 'mineral_mass_kg', v),
+            'BMR': lambda m, v: setattr(m, 'bmr_kcal', int(v)),
+            'VFA': lambda m, v: setattr(m, 'visceral_fat_rating', int(v)),
             
-            # Advanced metrics
-            'VFA': lambda m, v: setattr(m, 'visceral_fat_area_cm2', v),
-            'VFL': lambda m, v: setattr(m, 'visceral_fat_level', int(v)),
-            'BMR': lambda m, v: setattr(m, 'basal_metabolic_rate_kcal', int(v)),
-            
-            # Segmental analysis
-            'RLA': lambda m, v: setattr(m, 'right_leg_lean_mass_kg', v),
-            'LLA': lambda m, v: setattr(m, 'left_leg_lean_mass_kg', v),
-            'RAA': lambda m, v: setattr(m, 'right_arm_lean_mass_kg', v),
-            'LAA': lambda m, v: setattr(m, 'left_arm_lean_mass_kg', v),
-            'TR': lambda m, v: setattr(m, 'trunk_lean_mass_kg', v),
+            # Segmental analysis (InBody specialty)
+            'RLA': lambda m, v: setattr(m, 'right_leg_muscle_kg', v),
+            'LLA': lambda m, v: setattr(m, 'left_leg_muscle_kg', v),
+            'RAA': lambda m, v: setattr(m, 'right_arm_muscle_kg', v),
+            'LAA': lambda m, v: setattr(m, 'left_arm_muscle_kg', v),
+            'TR': lambda m, v: setattr(m, 'trunk_muscle_kg', v),
             
             # Bioelectrical impedance
-            'IMP1': lambda m, v: setattr(m, 'impedance_1khz', v),
-            'IMP5': lambda m, v: setattr(m, 'impedance_5khz', v),
             'IMP50': lambda m, v: setattr(m, 'impedance_50khz', v),
             'IMP250': lambda m, v: setattr(m, 'impedance_250khz', v),
-            'IMP500': lambda m, v: setattr(m, 'impedance_500khz', v),
-            'IMP1000': lambda m, v: setattr(m, 'impedance_1000khz', v),
             
             # Phase angle
-            'PA50': lambda m, v: setattr(m, 'phase_angle_50khz', v),
-            'PAWB': lambda m, v: setattr(m, 'phase_angle_whole_body', v),
+            'PA50': lambda m, v: setattr(m, 'phase_angle', v),
         }
         
         # Find matching measurement
@@ -275,11 +204,14 @@ class HL7MessageParser:
                 logger.debug(f"Mapped {observation_id} = {numeric_value} {units}")
                 break
     
-    def _parse_nte_segment(self, fields: List[str], measurement: InBodyMeasurement):
+    def _parse_nte_segment(self, fields: List[str], measurement: MeasurementData):
         """Parse NTE (Notes) segment"""
         if len(fields) > 3:
             note = fields[3].strip()
-            logger.debug(f"Note: {note}")
+            if measurement.processing_notes:
+                measurement.processing_notes += f"; {note}"
+            else:
+                measurement.processing_notes = note
     
     def _extract_phone_number(self, patient_id: str) -> str:
         """Extract Vietnamese phone number from patient ID"""
@@ -310,63 +242,77 @@ class HL7MessageParser:
         logger.warning(f"Invalid phone number format: {patient_id}")
         return digits
     
-    def _validate_measurement(self, measurement: InBodyMeasurement) -> bool:
+    def _validate_measurement(self, measurement: MeasurementData) -> bool:
         """Validate parsed measurement data"""
         # Check required fields
-        if not measurement.phone_number:
-            logger.warning("Missing phone number in measurement")
+        if not measurement.customer_phone:
+            logger.warning("Missing phone number in HL7 measurement")
             return False
         
         if not measurement.weight_kg or measurement.weight_kg <= 0:
-            logger.warning("Missing or invalid weight in measurement")
+            logger.warning("Missing or invalid weight in HL7 measurement")
             return False
         
         # Phone number format validation
         phone_pattern = r'^0[2-9][0-9]{8}$'
-        if not re.match(phone_pattern, measurement.phone_number):
-            logger.warning(f"Invalid phone number format: {measurement.phone_number}")
+        if not re.match(phone_pattern, measurement.customer_phone):
+            logger.warning(f"Invalid phone number format: {measurement.customer_phone}")
             return False
         
         return True
 
-
-class InBody370sHandler(BaseDeviceProtocol):
-    """InBody 370s HL7 Protocol Handler with dual port support"""
+class InBodyProtocol(DeviceProtocol):
+    """
+    InBody 270/370s Protocol Handler
+    Supports HL7 communication over TCP/IP for professional InBody devices
+    """
     
-    def __init__(self, config: Dict = None, database_manager: DatabaseManager = None):
-        super().__init__(config or INBODY_CONFIG)
-        self.database_manager = database_manager
-        self.hl7_parser = HL7MessageParser()
+    def __init__(self, ip_address: str = "192.168.1.100", data_port: int = 2575, listening_port: int = 2580):
+        """
+        Initialize InBody protocol handler
         
-        # Dual port configuration
-        self.data_port = self.config.get('data_port', 2575)
-        self.listening_port = self.config.get('listening_port', 2580)
-        self.device_ip = self.config.get('device_ip', '192.168.1.100')
+        Args:
+            ip_address: IP address of InBody device
+            data_port: Port for receiving measurement data (default: 2575)
+            listening_port: Port for command interface (default: 2580)
+        """
+        super().__init__(f"tcp://{ip_address}:{data_port}")
+        self.device_type = "inbody_270"
+        self.device_id = f"inbody_{ip_address.replace('.', '_')}"
+        self.capabilities = InBodyCapabilities()
+        
+        # Network configuration
+        self.ip_address = ip_address
+        self.data_port = data_port
+        self.listening_port = listening_port
+        
+        # HL7 parser
+        self.hl7_parser = HL7MessageParser()
         
         # Server sockets
         self.data_server = None
         self.command_server = None
-        self.running = False
+        self.server_running = False
         
-        # Message callbacks
-        self.message_callbacks: List[Callable] = []
+        # Client connections
+        self.active_connections = []
         
-        logger.info(f"InBody 370s Handler initialized: Data port {self.data_port}, Listening port {self.listening_port}")
+        logger.info(f"InBody protocol initialized: {ip_address}:{data_port}")
     
-    def add_message_callback(self, callback: Callable[[InBodyMeasurement], None]):
-        """Add callback for processed measurements"""
-        self.message_callbacks.append(callback)
-    
-    def start(self) -> bool:
-        """Start InBody 370s HL7 server with dual port support"""
+    def connect(self) -> bool:
+        """Start HL7 TCP server for InBody device connections"""
         try:
-            # Start data reception server (port 2575)
+            logger.info(f"Starting InBody HL7 server on {self.ip_address}:{self.data_port}")
+            self.state = DeviceState.CONNECTING
+            self.stats['connection_attempts'] += 1
+            
+            # Start data reception server
             self.data_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.data_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.data_server.bind(('0.0.0.0', self.data_port))
-            self.data_server.listen(self.config.get('max_connections', 10))
+            self.data_server.listen(10)
             
-            # Start command interface server (port 2580) - optional
+            # Start command interface server (optional)
             try:
                 self.command_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.command_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -377,7 +323,7 @@ class InBody370sHandler(BaseDeviceProtocol):
                 logger.warning(f"Command interface failed to start: {e}")
                 self.command_server = None
             
-            self.running = True
+            self.server_running = True
             
             # Start server threads
             data_thread = threading.Thread(target=self._data_server_loop, daemon=True)
@@ -387,52 +333,86 @@ class InBody370sHandler(BaseDeviceProtocol):
                 command_thread = threading.Thread(target=self._command_server_loop, daemon=True)
                 command_thread.start()
             
-            logger.info(f"InBody 370s Handler started successfully on ports {self.data_port}/{self.listening_port}")
+            self.state = DeviceState.CONNECTED
+            self.is_connected = True
+            self.connection_time = datetime.now()
+            self.error_count = 0
+            
+            logger.info(f"InBody HL7 server started successfully")
+            self._trigger_status_callback("HL7 server started")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to start InBody 370s Handler: {e}")
-            self.stop()
+            logger.error(f"Failed to start InBody HL7 server: {e}")
+            self.state = DeviceState.ERROR
+            self._trigger_error_callback(f"Server start error: {e}")
             return False
     
-    def stop(self):
-        """Stop InBody 370s HL7 server"""
-        self.running = False
-        
-        if self.data_server:
-            self.data_server.close()
-        if self.command_server:
-            self.command_server.close()
-        
-        logger.info("InBody 370s Handler stopped")
+    def disconnect(self):
+        """Stop InBody HL7 server"""
+        try:
+            logger.info("Stopping InBody HL7 server")
+            
+            self.server_running = False
+            
+            # Close active connections
+            for conn in self.active_connections:
+                try:
+                    conn.close()
+                except:
+                    pass
+            self.active_connections.clear()
+            
+            # Close server sockets
+            if self.data_server:
+                self.data_server.close()
+            if self.command_server:
+                self.command_server.close()
+            
+            self.state = DeviceState.DISCONNECTED
+            self.is_connected = False
+            logger.info("InBody HL7 server stopped")
+            
+        except Exception as e:
+            logger.error(f"InBody disconnection error: {e}")
+    
+    def read_measurement(self, timeout: float = 30.0) -> Optional[MeasurementData]:
+        """
+        Note: InBody measurements come through HL7 TCP connections
+        This method is for compatibility but actual measurements are processed in callbacks
+        """
+        logger.debug("InBody measurements are processed via HL7 TCP callbacks")
+        return None
     
     def _data_server_loop(self):
-        """Main loop for data reception server"""
-        logger.info(f"Data server listening on port {self.data_port}")
+        """Main loop for HL7 data reception server"""
+        logger.info(f"HL7 data server listening on port {self.data_port}")
         
-        while self.running:
+        while self.server_running:
             try:
                 client_socket, client_address = self.data_server.accept()
-                logger.info(f"Data connection from {client_address}")
+                logger.info(f"HL7 connection from {client_address}")
+                
+                self.active_connections.append(client_socket)
                 
                 # Handle client in separate thread
                 client_thread = threading.Thread(
-                    target=self._handle_data_client,
+                    target=self._handle_hl7_client,
                     args=(client_socket, client_address),
                     daemon=True
                 )
                 client_thread.start()
                 
             except socket.error as e:
-                if self.running:
-                    logger.error(f"Data server error: {e}")
+                if self.server_running:
+                    logger.error(f"HL7 server error: {e}")
                 break
     
     def _command_server_loop(self):
         """Main loop for command interface server"""
         logger.info(f"Command server listening on port {self.listening_port}")
         
-        while self.running:
+        while self.server_running:
             try:
                 client_socket, client_address = self.command_server.accept()
                 logger.info(f"Command connection from {client_address}")
@@ -446,16 +426,16 @@ class InBody370sHandler(BaseDeviceProtocol):
                 client_thread.start()
                 
             except socket.error as e:
-                if self.running:
+                if self.server_running:
                     logger.error(f"Command server error: {e}")
                 break
     
-    def _handle_data_client(self, client_socket: socket.socket, client_address: Tuple[str, int]):
-        """Handle data client connection (measurement data)"""
+    def _handle_hl7_client(self, client_socket: socket.socket, client_address: Tuple[str, int]):
+        """Handle HL7 data client connection"""
         try:
             buffer = b''
             
-            while True:
+            while self.server_running:
                 data = client_socket.recv(4096)
                 if not data:
                     break
@@ -476,23 +456,24 @@ class InBody370sHandler(BaseDeviceProtocol):
                         client_socket.send(ack.encode('utf-8'))
         
         except Exception as e:
-            logger.error(f"Data client error: {e}")
+            logger.error(f"HL7 client error: {e}")
         finally:
+            if client_socket in self.active_connections:
+                self.active_connections.remove(client_socket)
             client_socket.close()
-            logger.debug(f"Data client {client_address} disconnected")
+            logger.debug(f"HL7 client {client_address} disconnected")
     
     def _handle_command_client(self, client_socket: socket.socket, client_address: Tuple[str, int]):
-        """Handle command client connection (optional)"""
+        """Handle command client connection"""
         try:
-            # Simple command interface for device management
             logger.info(f"Command client connected: {client_address}")
             
             # Send welcome message
-            welcome = "InBody 370s Command Interface\r\n"
+            welcome = "InBody Command Interface\r\n"
             client_socket.send(welcome.encode('utf-8'))
             
-            # Handle commands (basic implementation)
-            while True:
+            # Handle commands
+            while self.server_running:
                 data = client_socket.recv(1024)
                 if not data:
                     break
@@ -517,35 +498,46 @@ class InBody370sHandler(BaseDeviceProtocol):
             measurement = self.hl7_parser.parse_message(message_str)
             
             if measurement:
-                logger.info(f"Parsed measurement for phone: {measurement.phone_number}")
+                logger.info(f"Parsed HL7 measurement for phone: {measurement.customer_phone}")
                 
-                # Call registered callbacks
-                for callback in self.message_callbacks:
-                    try:
-                        callback(measurement)
-                    except Exception as e:
-                        logger.error(f"Callback error: {e}")
+                # Update statistics
+                self.stats['measurements_received'] += 1
+                self.last_activity = datetime.now()
                 
-                # Save to database if configured
-                if self.database_manager:
-                    self._save_measurement(measurement)
+                # Validate measurement
+                errors = measurement.validate()
+                if not errors:
+                    self.stats['successful_measurements'] += 1
+                    measurement.status = MeasurementStatus.COMPLETE
+                else:
+                    self.stats['failed_measurements'] += 1
+                    measurement.status = MeasurementStatus.ERROR
+                    logger.warning(f"HL7 measurement validation errors: {errors}")
+                
+                # Trigger callback
+                if self.measurement_callback:
+                    self.measurement_callback(measurement)
                 
             else:
                 logger.warning("Failed to parse HL7 message")
+                self.stats['failed_measurements'] += 1
                 
         except Exception as e:
             logger.error(f"Error processing HL7 message: {e}")
+            self._trigger_error_callback(f"HL7 processing error: {e}")
     
     def _process_command(self, command: str) -> str:
         """Process command interface commands"""
         command = command.upper().strip()
         
         if command == 'STATUS':
-            return f"InBody 370s Handler Status: {'Running' if self.running else 'Stopped'}\r\n"
+            return f"InBody HL7 Handler Status: {'Running' if self.server_running else 'Stopped'}\r\n"
         elif command == 'VERSION':
-            return "InBody 370s Handler v1.0\r\n"
+            return "InBody HL7 Handler v2.0\r\n"
+        elif command == 'STATS':
+            return f"Measurements: {self.stats['measurements_received']}, Errors: {self.stats['errors']}\r\n"
         elif command == 'HELP':
-            return "Available commands: STATUS, VERSION, HELP, QUIT\r\n"
+            return "Available commands: STATUS, VERSION, STATS, HELP, QUIT\r\n"
         elif command == 'QUIT':
             return "Goodbye\r\n"
         else:
@@ -557,48 +549,47 @@ class InBody370sHandler(BaseDeviceProtocol):
         message_id = f"ACK{int(time.time())}"
         
         ack = (
-            f"MSH|^~\\&|ACTIWELL|RASPBERRY_PI|INBODY370S|DEVICE|{timestamp}||ACK^R01^ACK|{message_id}|P|2.5\r"
+            f"MSH|^~\\&|ACTIWELL|RASPBERRY_PI|INBODY|DEVICE|{timestamp}||ACK^R01^ACK|{message_id}|P|2.5\r"
             f"MSA|AA|{message_id}|Message accepted\r"
         )
         return ack + '\x1C\r'
     
-    def _save_measurement(self, measurement: InBodyMeasurement):
-        """Save measurement to database"""
-        try:
-            if self.database_manager:
-                # Convert measurement to database format
-                measurement_data = {
-                    'device_id': measurement.device_id,
-                    'extracted_phone_number': measurement.phone_number,
-                    'patient_id': measurement.patient_id,
-                    'measurement_timestamp': measurement.measurement_timestamp,
-                    'weight_kg': measurement.weight_kg,
-                    'height_cm': measurement.height_cm,
-                    'bmi': measurement.bmi,
-                    'body_fat_percent': measurement.body_fat_percent,
-                    'skeletal_muscle_mass_kg': measurement.skeletal_muscle_mass_kg,
-                    'visceral_fat_area_cm2': measurement.visceral_fat_area_cm2,
-                    'basal_metabolic_rate_kcal': measurement.basal_metabolic_rate_kcal,
-                    'raw_hl7_message': measurement.raw_hl7_message,
-                    'hl7_message_type': measurement.hl7_message_type
-                }
-                
-                # Save to database
-                result = self.database_manager.save_inbody_measurement(measurement_data)
-                if result:
-                    logger.info(f"Measurement saved to database for {measurement.phone_number}")
-                else:
-                    logger.error("Failed to save measurement to database")
-                    
-        except Exception as e:
-            logger.error(f"Database save error: {e}")
+    def start_measurement(self, customer_id: str = "") -> bool:
+        """
+        Note: InBody devices don't support remote measurement start
+        Measurements are initiated on the device itself
+        """
+        logger.info("InBody measurement ready - start measurement on device")
+        if customer_id:
+            logger.info(f"Customer ID for measurement: {customer_id}")
+        
+        self.state = DeviceState.READY
+        return True
     
-    def get_status(self) -> DeviceStatus:
-        """Get device handler status"""
-        return DeviceStatus(
-            device_id="INBODY-370S-001",
-            device_type="InBody-370s",
-            status="online" if self.running else "offline",
-            connection_type="ethernet_hl7",
-            last_heartbeat=datetime.now() if self.running else None
-        )
+    def get_device_info(self) -> Dict[str, any]:
+        """Get comprehensive InBody device information"""
+        base_info = super().get_device_info()
+        
+        # Add InBody-specific information
+        base_info.update({
+            'model': 'InBody-270/370s',
+            'manufacturer': 'InBody Co., Ltd.',
+            'protocol': 'HL7 v2.5',
+            'data_port': self.data_port,
+            'listening_port': self.listening_port,
+            'ip_address': self.ip_address,
+            'active_connections': len(self.active_connections),
+            'server_running': self.server_running,
+            'supported_features': [
+                'Segmental lean analysis',
+                'Bioelectrical impedance',
+                'Phase angle',
+                'Body composition history',
+                'HL7 integration'
+            ]
+        })
+        
+        return base_info
+    
+    def __str__(self):
+        return f"InBody HL7 on {self.ip_address}:{self.data_port} (connections: {len(self.active_connections)})"

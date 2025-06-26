@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Device Manager for Body Composition Devices
-Manages multiple Tanita MC-780MA and InBody 270 devices
 Provides device discovery, connection management, and measurement coordination
 """
 

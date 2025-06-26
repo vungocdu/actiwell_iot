@@ -1,28 +1,10 @@
-# Flask Framework
 Flask==2.3.3
 Flask-CORS==4.0.0
-
-# Database
 mysql-connector-python==8.1.0
-
-# Serial Communication
 pyserial==3.5
-
-# HTTP Requests
 requests==2.31.0
-
-# Authentication
 PyJWT==2.8.0
-
-# Configuration
 python-dotenv==1.0.0
-
-# System Monitoring
 psutil==5.9.5
-
-# WSGI Server for Production
-gunicorn==21.2.0
-
-# Development tools (optional)
-# pytest==7.4.0
-# pytest-cov==4.1.0
+asyncio
+threading
