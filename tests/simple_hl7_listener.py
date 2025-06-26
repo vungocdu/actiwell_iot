@@ -10,6 +10,7 @@ Description:
 - Thread 1: Listens for incoming measurement data on the DATA_PORT.
 - Thread 2: Sends a simple command to the InBody's LISTENING_PORT.
 - Designed to debug scenarios where a command is required before data is sent.
+- Version 1.1: Fixed NameError for 'logger' within threads.
 """
 
 import socket
@@ -35,7 +36,8 @@ VT = b'\x0b'
 FS = b'\x1c'
 CR = b'\x0d'
 
-# Logging setup
+# --- Global Logging Setup ---
+# This configures the root logger.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s'
@@ -44,6 +46,9 @@ logging.basicConfig(
 # --- Thread 1: The Data Listener ---
 def data_listener():
     """Listens on DATA_PORT_ON_PI for HL7 messages from the InBody."""
+    # --- FIX: Get logger instance for this thread ---
+    logger = logging.getLogger(__name__)
+    
     thread_name = threading.current_thread().name
     logger.info("Starting... Will listen on {}:{}".format(PI_IP, DATA_PORT_ON_PI))
     
@@ -65,8 +70,10 @@ def data_listener():
             if full_data:
                 logger.info("SUCCESS! Received {} bytes of data.".format(len(full_data)))
                 print("\n" + "="*20 + " RAW HL7 DATA RECEIVED " + "="*20)
-                # Print readable data
+                # Print readable data by replacing control characters
                 readable_data = full_data.decode('utf-8', 'ignore').replace(chr(0x0d), '\n')
+                readable_data = readable_data.replace(chr(0x0b), '<VT>\n')
+                readable_data = readable_data.replace(chr(0x1c), '\n<FS>')
                 print(readable_data.strip())
                 print("="*60 + "\n")
             else:
@@ -83,6 +90,9 @@ def data_listener():
 # --- Thread 2: The Command Sender ---
 def send_command():
     """Connects to COMMAND_PORT_ON_INBODY and sends a simple request."""
+    # --- FIX: Get logger instance for this thread ---
+    logger = logging.getLogger(__name__)
+    
     thread_name = threading.current_thread().name
     logger.info("Starting... Will send a command to {}:{}".format(INBODY_IP, COMMAND_PORT_ON_INBODY))
     
@@ -91,7 +101,6 @@ def send_command():
 
     # This is a hypothetical HL7 "Query" or "Request" message.
     # The exact format might be different and needs to be checked in InBody's documentation.
-    # This example requests the result for a specific patient ID (phone number).
     timestamp = time.strftime("%Y%m%d%H%M%S")
     message_id = "MSG" + str(int(time.time()))
     
@@ -118,7 +127,7 @@ def send_command():
             logger.info("Waiting for ACK from InBody...")
             response = s.recv(1024)
             if response:
-                logger.info("Received response/ACK from InBody: {}".format(response.decode('utf-8', 'ignore')))
+                logger.info("Received response/ACK from InBody: {}".format(response.decode('utf-8', 'ignore').replace('\r', '\n')))
             else:
                 logger.warning("No ACK received, but command was sent.")
 
@@ -131,9 +140,10 @@ def send_command():
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    print("="*60)
-    print("      InBody 370s Interactive HL7 Debugger      ")
-    print("="*60)
+    main_logger = logging.getLogger(__name__)
+    main_logger.info("="*60)
+    main_logger.info("      InBody 370s Interactive HL7 Debugger      ")
+    main_logger.info("="*60)
     
     # Create the listener thread
     listener_thread = threading.Thread(target=data_listener, name="HL7-Listener")
@@ -145,12 +155,12 @@ if __name__ == "__main__":
     listener_thread.start()
     command_thread.start()
     
-    print("\n[INFO] Both threads have been started.")
-    print("[ACTION] Please perform a measurement on the InBody device now.")
-    print("[INFO] The script will wait for results for up to 60 seconds.\n")
+    main_logger.info("Both threads have been started.")
+    print("\n[ACTION] Please perform a measurement on the InBody device now.")
+    main_logger.info("The script will wait for results for up to 60 seconds.\n")
     
     # Wait for both threads to complete
     listener_thread.join()
     command_thread.join()
     
-    print("\n[INFO] Debugging session finished.")
+    main_logger.info("Debugging session finished.")
