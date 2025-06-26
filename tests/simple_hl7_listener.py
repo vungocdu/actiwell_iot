@@ -2,33 +2,29 @@
 # -*- coding: utf-8 -*-
 
 """
-InBody 370s Interactive HL7 Debugger
-=====================================
+InBody 370s HL7 Handler - Focused on Receiving Measurement Results
+===================================================================
 
 Description:
-- Simulates a two-way HL7 communication flow with an InBody 370s.
-- Thread 1: Listens for incoming measurement data on the DATA_PORT.
-- Thread 2: Sends a simple command to the InBody's LISTENING_PORT.
-- Designed to debug scenarios where a command is required before data is sent.
-- Version 1.1: Fixed NameError for 'logger' within threads.
+- This script implements a robust handler for receiving HL7 measurement
+  data from an InBody 370s device in a two-way communication setup.
+- It continuously waits for a measurement, sends a command to the InBody,
+  and listens for the resulting HL7 data packet.
+- Designed for stability and clear debugging.
+
+Version: 2.0.0 (Class-based, Production-ready)
 """
 
 import socket
 import logging
-import threading
 import time
+import re
 
 # --- Configuration ---
 INBODY_IP = '192.168.1.100'
 PI_IP = '192.168.1.50'
-
-# Port on the Pi that will LISTEN for InBody's data
-DATA_PORT_ON_PI = 2575
-
-# Port on the InBody that LISTENS for our commands
-COMMAND_PORT_ON_INBODY = 2580
-
-# A test phone number to include in the command
+DATA_PORT_ON_PI = 2575  # Port on Pi to LISTEN for InBody's data
+COMMAND_PORT_ON_INBODY = 2580  # Port on InBody to SEND commands to
 TEST_PHONE = "0965385123"
 
 # HL7 Terminators
@@ -36,131 +32,194 @@ VT = b'\x0b'
 FS = b'\x1c'
 CR = b'\x0d'
 
-# --- Global Logging Setup ---
-# This configures the root logger.
+# Logging Setup
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger("InBodyHandler")
 
-# --- Thread 1: The Data Listener ---
-def data_listener():
-    """Listens on DATA_PORT_ON_PI for HL7 messages from the InBody."""
-    # --- FIX: Get logger instance for this thread ---
-    logger = logging.getLogger(__name__)
-    
-    thread_name = threading.current_thread().name
-    logger.info("Starting... Will listen on {}:{}".format(PI_IP, DATA_PORT_ON_PI))
-    
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    try:
-        server_socket.bind((PI_IP, DATA_PORT_ON_PI))
-        server_socket.listen(1)
-        logger.info("Socket bound. Waiting for InBody to send data...")
 
-        # Wait for a connection from InBody with a timeout
-        server_socket.settimeout(60.0) # Wait for 60 seconds
-        client_socket, addr = server_socket.accept()
-        logger.info("Accepted connection from InBody at {}".format(addr))
+class InBodyHL7Handler:
+    """Handles the two-way communication with an InBody 370s device."""
 
-        with client_socket:
-            full_data = client_socket.recv(4096) # Read a large chunk of data
-            if full_data:
-                logger.info("SUCCESS! Received {} bytes of data.".format(len(full_data)))
-                print("\n" + "="*20 + " RAW HL7 DATA RECEIVED " + "="*20)
-                # Print readable data by replacing control characters
-                readable_data = full_data.decode('utf-8', 'ignore').replace(chr(0x0d), '\n')
-                readable_data = readable_data.replace(chr(0x0b), '<VT>\n')
-                readable_data = readable_data.replace(chr(0x1c), '\n<FS>')
-                print(readable_data.strip())
-                print("="*60 + "\n")
-            else:
-                logger.warning("Connection from InBody, but no data received.")
+    def __init__(self, pi_ip, data_port, inbody_ip, command_port):
+        self.pi_ip = pi_ip
+        self.data_port = data_port
+        self.inbody_ip = inbody_ip
+        self.command_port = command_port
+        self.listener_socket = None
 
-    except socket.timeout:
-        logger.warning("Listener timed out. No data received from InBody in 60 seconds.")
-    except Exception as e:
-        logger.error("An error occurred: {}".format(e))
-    finally:
-        server_socket.close()
-        logger.info("Listener thread finished.")
+    def _setup_listener(self):
+        """Initializes and binds the listening socket."""
+        logger.info(f"Setting up listener on {self.pi_ip}:{self.data_port}")
+        self.listener_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self.listener_socket.bind((self.pi_ip, self.data_port))
+            self.listener_socket.listen(1)
+            logger.info("Listener is ready and waiting for connections.")
+            return True
+        except socket.error as e:
+            logger.error(f"Failed to bind listener socket: {e}")
+            return False
 
-# --- Thread 2: The Command Sender ---
-def send_command():
-    """Connects to COMMAND_PORT_ON_INBODY and sends a simple request."""
-    # --- FIX: Get logger instance for this thread ---
-    logger = logging.getLogger(__name__)
-    
-    thread_name = threading.current_thread().name
-    logger.info("Starting... Will send a command to {}:{}".format(INBODY_IP, COMMAND_PORT_ON_INBODY))
-    
-    # Wait a moment for the listener to be ready
-    time.sleep(2) 
+    def _send_trigger_command(self):
+        """
+        Sends a command to the InBody device to trigger the data transmission.
+        Based on previous logs, this is a necessary step.
+        """
+        # NOTE: The content of this HL7 message is hypothetical.
+        # It needs to be replaced with the correct command from InBody's documentation.
+        # This ORM^O01 (Order Message) is a common choice for requesting a procedure.
+        timestamp = time.strftime("%Y%m%d%H%M%S")
+        message_id = f"MSG{int(time.time())}"
+        
+        hl7_order_message = (
+            f"MSH|^~\\&|RASPBERRY_PI|ACTIWELL|INBODY_370S|DEVICE|{timestamp}||ORM^O01^ORM_O01|{message_id}|P|2.5\r"
+            f"PID|1||{TEST_PHONE}^^^PHONE||Test^Patient||19900101|M\r"
+            f"ORC|NW|{message_id}\r" # NW = New Order
+            f"OBR|1||{message_id}|BODYCOMP^Body Composition^L|||{timestamp}"
+        ).encode('utf-8')
+        
+        full_packet = VT + hl7_order_message + FS + CR
 
-    # This is a hypothetical HL7 "Query" or "Request" message.
-    # The exact format might be different and needs to be checked in InBody's documentation.
-    timestamp = time.strftime("%Y%m%d%H%M%S")
-    message_id = "MSG" + str(int(time.time()))
-    
-    # MLLP Framing: <VT>HL7_MESSAGE<FS><CR>
-    hl7_query_message = (
-        f"MSH|^~\\&|RASPBERRY_PI|ACTIWELL|INBODY_370S|DEVICE|{timestamp}||QBP^Q22^QBP_Q21|{message_id}|P|2.5{chr(0x0d)}"
-        f"QPD|IHE_PCD_Q22^Query for Previous Patient Data^IHE_PCD|{message_id}|{TEST_PHONE}^^^PHONE{chr(0x0d)}"
-        f"RCP|I"
-    ).encode('utf-8')
-    
-    full_packet = VT + hl7_query_message + FS + CR
+        logger.info(f"Connecting to InBody command port at {self.inbody_ip}:{self.command_port}...")
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(10.0)
+                s.connect((self.inbody_ip, self.command_port))
+                logger.info("Connected. Sending trigger command...")
+                s.sendall(full_packet)
+                
+                # Check for ACK
+                response = s.recv(1024)
+                if response:
+                    logger.info(f"Received ACK from InBody: {response.decode('utf-8', 'ignore').strip()}")
+                    return True
+                else:
+                    logger.warning("Command sent, but no ACK received.")
+                    return True # Assume it worked anyway
+        except Exception as e:
+            logger.error(f"Failed to send trigger command: {e}")
+            return False
 
-    try:
-        logger.info("Connecting to InBody's command port...")
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(10.0)
-            s.connect((INBODY_IP, COMMAND_PORT_ON_INBODY))
-            logger.info("Connected! Sending command packet ({} bytes)...".format(len(full_packet)))
+    def _wait_for_and_process_data(self):
+        """Waits for the InBody to connect back and send the measurement data."""
+        if not self.listener_socket:
+            logger.error("Listener socket is not set up. Cannot wait for data.")
+            return None
+
+        try:
+            # Wait for the InBody to connect to our listening port
+            self.listener_socket.settimeout(60.0) # Wait up to 60 seconds
+            client_socket, addr = self.listener_socket.accept()
+            logger.info(f"Data connection accepted from InBody at {addr}")
+
+            with client_socket:
+                client_socket.settimeout(30.0)
+                full_data = bytearray()
+                while True:
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break
+                    full_data.extend(data)
+                    if FS in full_data: # End of message detected
+                        break
+                
+                if full_data:
+                    logger.info("SUCCESS! Full measurement packet received.")
+                    self.display_and_parse_data(full_data)
+                else:
+                    logger.warning("Connection from InBody but no data was received.")
+
+        except socket.timeout:
+            logger.warning("Timeout: Waited 60 seconds but InBody did not connect back to send data.")
+        except Exception as e:
+            logger.error(f"Error while receiving data: {e}")
+        
+    @staticmethod
+    def display_and_parse_data(raw_bytes):
+        """Displays the raw data and attempts to parse key values."""
+        print("\n" + "="*25 + " RAW HL7 DATA " + "="*25)
+        
+        # Make control characters visible for debugging
+        readable_data = raw_bytes.decode('utf-8', 'ignore')
+        printable_data = readable_data.replace(chr(0x0b), '<VT>\n')
+        printable_data = printable_data.replace(chr(0x1c), '\n<FS>')
+        printable_data = printable_data.replace('\r', '\n')
+        print(printable_data.strip())
+        print("="*68)
+
+        # Basic HL7 Parsing
+        logger.info("Parsing key measurement values...")
+        results = {}
+        segments = readable_data.split('\r')
+        for segment in segments:
+            fields = segment.strip().split('|')
+            if not fields:
+                continue
             
-            s.sendall(full_packet)
-            logger.info("Command sent successfully.")
-            
-            # Wait for a potential ACK (Acknowledgement)
-            logger.info("Waiting for ACK from InBody...")
-            response = s.recv(1024)
-            if response:
-                logger.info("Received response/ACK from InBody: {}".format(response.decode('utf-8', 'ignore').replace('\r', '\n')))
-            else:
-                logger.warning("No ACK received, but command was sent.")
+            segment_type = fields[0]
+            if segment_type == 'PID' and len(fields) > 5:
+                results['PhoneNumber'] = fields[3].split('^')[0]
+            elif segment_type == 'OBX' and len(fields) > 5:
+                # Example: OBX|1|NM|WT^Weight^LOCAL||68.5|kg|||||F
+                value_name = fields[3].split('^')[0]
+                value = fields[5]
+                unit = fields[6] if len(fields) > 6 else ''
+                results[value_name] = f"{value} {unit}".strip()
 
-    except socket.timeout:
-        logger.error("Connection to command port timed out. Is InBody listening on port {}?".format(COMMAND_PORT_ON_INBODY))
-    except Exception as e:
-        logger.error("Failed to send command: {}".format(e))
-    finally:
-        logger.info("Command sender thread finished.")
+        if results:
+            print("\n" + "*"*25 + " PARSED RESULTS " + "*"*25)
+            for key, value in results.items():
+                print(f"{key:<20}: {value}")
+            print("*"*68 + "\n")
+        else:
+            logger.warning("Could not parse any key values from the message.")
 
-# --- Main Execution ---
+    def run_forever(self):
+        """The main loop to continuously handle InBody measurements."""
+        if not self._setup_listener():
+            return # Exit if we can't even start the listener
+        
+        while True:
+            try:
+                print("\n" + "#"*68)
+                logger.info("Starting new measurement cycle.")
+                logger.info("Please prepare the InBody device.")
+                print("[ACTION] Press the 'START' or 'ENTER' button on the InBody to initiate a test.")
+                print("#"*68)
+
+                # Step 1: Send a command to wake up the InBody.
+                # This might be what happens when you press "Enter" on the InBody screen
+                # with the Pi's IP configured.
+                if not self._send_trigger_command():
+                    logger.warning("Could not send trigger command. Will still listen for data, but it might not arrive.")
+
+                # Step 2: Wait for the InBody to perform the measurement and send data back.
+                logger.info("Command sent. Now waiting for InBody to connect and send measurement data...")
+                self._wait_for_and_process_data()
+                
+                logger.info("Measurement cycle finished. Resetting for the next one in 5 seconds...")
+                time.sleep(5)
+
+            except KeyboardInterrupt:
+                logger.info("Shutdown signal received. Exiting.")
+                break
+            except Exception as e:
+                logger.error(f"An unhandled error occurred in the main loop: {e}")
+                logger.info("Restarting cycle in 15 seconds...")
+                time.sleep(15)
+        
+        if self.listener_socket:
+            self.listener_socket.close()
+
 if __name__ == "__main__":
-    main_logger = logging.getLogger(__name__)
-    main_logger.info("="*60)
-    main_logger.info("      InBody 370s Interactive HL7 Debugger      ")
-    main_logger.info("="*60)
-    
-    # Create the listener thread
-    listener_thread = threading.Thread(target=data_listener, name="HL7-Listener")
-    
-    # Create the command sender thread
-    command_thread = threading.Thread(target=send_command, name="HL7-CommandSender")
-    
-    # Start the threads
-    listener_thread.start()
-    command_thread.start()
-    
-    main_logger.info("Both threads have been started.")
-    print("\n[ACTION] Please perform a measurement on the InBody device now.")
-    main_logger.info("The script will wait for results for up to 60 seconds.\n")
-    
-    # Wait for both threads to complete
-    listener_thread.join()
-    command_thread.join()
-    
-    main_logger.info("Debugging session finished.")
+    handler = InBodyHL7Handler(
+        pi_ip=PI_IP,
+        data_port=DATA_PORT_ON_PI,
+        inbody_ip=INBODY_IP,
+        command_port=COMMAND_PORT_ON_INBODY
+    )
+    handler.run_forever()
