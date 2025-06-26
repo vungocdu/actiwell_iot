@@ -2,224 +2,225 @@
 # -*- coding: utf-8 -*-
 
 """
-InBody 370s HL7 Handler - Focused on Receiving Measurement Results
-===================================================================
+InBody 370s - Passive HL7 Listener and Parser
+===============================================
 
 Description:
-- This script implements a robust handler for receiving HL7 measurement
-  data from an InBody 370s device in a two-way communication setup.
-- It continuously waits for a measurement, sends a command to the InBody,
-  and listens for the resulting HL7 data packet.
-- Designed for stability and clear debugging.
+- This script operates in a purely passive (one-way) listening mode.
+- It waits indefinitely for an InBody device to connect and send HL7 data.
+- It includes a dedicated HL7 parser to extract key measurement values.
+- Ideal for production environments where the Pi acts as a data receiver.
 
-Version: 2.0.0 (Class-based, Production-ready)
+Version: 3.0.0 (Passive Listener with Integrated Parser)
 """
 
 import socket
 import logging
 import time
 import re
+from dataclasses import dataclass, field
 
 # --- Configuration ---
-INBODY_IP = '192.168.1.100'
-PI_IP = '192.168.1.50'
-DATA_PORT_ON_PI = 2575  # Port on Pi to LISTEN for InBody's data
-COMMAND_PORT_ON_INBODY = 2580  # Port on InBody to SEND commands to
-TEST_PHONE = "0965385123"
+PI_IP = '192.168.1.50'  # The IP of this Raspberry Pi
+DATA_PORT_ON_PI = 2575 # The port this script will listen on
 
 # HL7 Terminators
 VT = b'\x0b'
 FS = b'\x1c'
-CR = b'\x0d'
 
 # Logging Setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("InBodyHandler")
+logger = logging.getLogger("InBodyListener")
 
 
-class InBodyHL7Handler:
-    """Handles the two-way communication with an InBody 370s device."""
+@dataclass
+class InBodyMeasurement:
+    """A structured dataclass to hold parsed InBody measurement data."""
+    phone_number: str = "N/A"
+    weight_kg: float = 0.0
+    height_cm: float = 0.0
+    bmi: float = 0.0
+    percent_body_fat: float = 0.0
+    raw_message: str = ""
+    errors: list[str] = field(default_factory=list)
 
-    def __init__(self, pi_ip, data_port, inbody_ip, command_port):
-        self.pi_ip = pi_ip
-        self.data_port = data_port
-        self.inbody_ip = inbody_ip
-        self.command_port = command_port
-        self.listener_socket = None
 
-    def _setup_listener(self):
-        """Initializes and binds the listening socket."""
-        logger.info(f"Setting up listener on {self.pi_ip}:{self.data_port}")
-        self.listener_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.listener_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+class HL7Parser:
+    """A dedicated parser for InBody HL7 messages."""
+    
+    # Mapping of InBody's local codes to standard names
+    # This might need adjustment based on your device's exact output.
+    CODE_MAP = {
+        'WT': 'weight_kg',
+        'HT': 'height_cm',
+        'BMI': 'bmi',
+        'PBF': 'percent_body_fat', # Percent Body Fat
+        'FAT': 'percent_body_fat'  # Some devices use FAT for PBF
+    }
+
+    def parse(self, raw_hl7_bytes: bytes) -> InBodyMeasurement:
+        """Parses a raw HL7 byte string into an InBodyMeasurement object."""
+        measurement = InBodyMeasurement()
+        
         try:
-            self.listener_socket.bind((self.pi_ip, self.data_port))
-            self.listener_socket.listen(1)
-            logger.info("Listener is ready and waiting for connections.")
-            return True
-        except socket.error as e:
-            logger.error(f"Failed to bind listener socket: {e}")
-            return False
-
-    def _send_trigger_command(self):
-        """
-        Sends a command to the InBody device to trigger the data transmission.
-        Based on previous logs, this is a necessary step.
-        """
-        # NOTE: The content of this HL7 message is hypothetical.
-        # It needs to be replaced with the correct command from InBody's documentation.
-        # This ORM^O01 (Order Message) is a common choice for requesting a procedure.
-        timestamp = time.strftime("%Y%m%d%H%M%S")
-        message_id = f"MSG{int(time.time())}"
-        
-        hl7_order_message = (
-            f"MSH|^~\\&|RASPBERRY_PI|ACTIWELL|INBODY_370S|DEVICE|{timestamp}||ORM^O01^ORM_O01|{message_id}|P|2.5\r"
-            f"PID|1||{TEST_PHONE}^^^PHONE||Test^Patient||19900101|M\r"
-            f"ORC|NW|{message_id}\r" # NW = New Order
-            f"OBR|1||{message_id}|BODYCOMP^Body Composition^L|||{timestamp}"
-        ).encode('utf-8')
-        
-        full_packet = VT + hl7_order_message + FS + CR
-
-        logger.info(f"Connecting to InBody command port at {self.inbody_ip}:{self.command_port}...")
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(10.0)
-                s.connect((self.inbody_ip, self.command_port))
-                logger.info("Connected. Sending trigger command...")
-                s.sendall(full_packet)
-                
-                # Check for ACK
-                response = s.recv(1024)
-                if response:
-                    logger.info(f"Received ACK from InBody: {response.decode('utf-8', 'ignore').strip()}")
-                    return True
-                else:
-                    logger.warning("Command sent, but no ACK received.")
-                    return True # Assume it worked anyway
-        except Exception as e:
-            logger.error(f"Failed to send trigger command: {e}")
-            return False
-
-    def _wait_for_and_process_data(self):
-        """Waits for the InBody to connect back and send the measurement data."""
-        if not self.listener_socket:
-            logger.error("Listener socket is not set up. Cannot wait for data.")
-            return None
-
-        try:
-            # Wait for the InBody to connect to our listening port
-            self.listener_socket.settimeout(60.0) # Wait up to 60 seconds
-            client_socket, addr = self.listener_socket.accept()
-            logger.info(f"Data connection accepted from InBody at {addr}")
-
-            with client_socket:
-                client_socket.settimeout(30.0)
-                full_data = bytearray()
-                while True:
-                    data = client_socket.recv(1024)
-                    if not data:
-                        break
-                    full_data.extend(data)
-                    if FS in full_data: # End of message detected
-                        break
-                
-                if full_data:
-                    logger.info("SUCCESS! Full measurement packet received.")
-                    self.display_and_parse_data(full_data)
-                else:
-                    logger.warning("Connection from InBody but no data was received.")
-
-        except socket.timeout:
-            logger.warning("Timeout: Waited 60 seconds but InBody did not connect back to send data.")
-        except Exception as e:
-            logger.error(f"Error while receiving data: {e}")
-        
-    @staticmethod
-    def display_and_parse_data(raw_bytes):
-        """Displays the raw data and attempts to parse key values."""
-        print("\n" + "="*25 + " RAW HL7 DATA " + "="*25)
-        
-        # Make control characters visible for debugging
-        readable_data = raw_bytes.decode('utf-8', 'ignore')
-        printable_data = readable_data.replace(chr(0x0b), '<VT>\n')
-        printable_data = printable_data.replace(chr(0x1c), '\n<FS>')
-        printable_data = printable_data.replace('\r', '\n')
-        print(printable_data.strip())
-        print("="*68)
-
-        # Basic HL7 Parsing
-        logger.info("Parsing key measurement values...")
-        results = {}
-        segments = readable_data.split('\r')
-        for segment in segments:
-            fields = segment.strip().split('|')
-            if not fields:
-                continue
+            # Decode the message, handling control characters
+            message_str = raw_hl7_bytes.decode('utf-8', 'ignore')
+            measurement.raw_message = message_str
             
-            segment_type = fields[0]
-            if segment_type == 'PID' and len(fields) > 5:
-                results['PhoneNumber'] = fields[3].split('^')[0]
-            elif segment_type == 'OBX' and len(fields) > 5:
-                # Example: OBX|1|NM|WT^Weight^LOCAL||68.5|kg|||||F
-                value_name = fields[3].split('^')[0]
-                value = fields[5]
-                unit = fields[6] if len(fields) > 6 else ''
-                results[value_name] = f"{value} {unit}".strip()
+            # HL7 segments are separated by a carriage return ('\r')
+            segments = message_str.strip().replace(chr(0x0b), '').replace(chr(0x1c), '').split('\r')
+            
+            for segment in segments:
+                segment = segment.strip()
+                if not segment:
+                    continue
+                
+                fields = segment.split('|')
+                segment_type = fields[0]
 
-        if results:
-            print("\n" + "*"*25 + " PARSED RESULTS " + "*"*25)
-            for key, value in results.items():
-                print(f"{key:<20}: {value}")
-            print("*"*68 + "\n")
-        else:
-            logger.warning("Could not parse any key values from the message.")
+                if segment_type == 'PID' and len(fields) > 3:
+                    self._parse_pid_segment(fields, measurement)
+                elif segment_type == 'OBX' and len(fields) > 5:
+                    self._parse_obx_segment(fields, measurement)
+
+        except Exception as e:
+            error_msg = f"Critical parsing error: {e}"
+            logger.error(error_msg)
+            measurement.errors.append(error_msg)
+
+        return measurement
+
+    def _parse_pid_segment(self, fields: list, measurement: InBodyMeasurement):
+        """Parses the Patient Identification (PID) segment."""
+        try:
+            # PID|1||123456789^^^...
+            patient_id_field = fields[3]
+            # Extract the ID part before any '^' characters
+            phone_number = patient_id_field.split('^')[0]
+            if phone_number:
+                measurement.phone_number = phone_number
+        except IndexError:
+            measurement.errors.append("Could not parse phone number from PID segment.")
+
+    def _parse_obx_segment(self, fields: list, measurement: InBodyMeasurement):
+        """Parses an Observation/Result (OBX) segment for a specific value."""
+        try:
+            # OBX|1|NM|WT^Weight^LOCAL|...|68.5|kg|...
+            observation_code = fields[3].split('^')[0]
+            value_str = fields[5]
+            
+            if observation_code in self.CODE_MAP:
+                attribute_name = self.CODE_MAP[observation_code]
+                try:
+                    value = float(value_str)
+                    setattr(measurement, attribute_name, value)
+                except (ValueError, TypeError):
+                    measurement.errors.append(f"Could not convert value '{value_str}' for code '{observation_code}' to float.")
+        except IndexError:
+            measurement.errors.append("Could not parse key values from OBX segment.")
+
+
+class InBodyPassiveListener:
+    """A robust, passive listener for InBody devices."""
+
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.parser = HL7Parser()
+        self.server_socket = None
+
+    def start(self):
+        """Starts the server and enters the main listening loop."""
+        logger.info(f"Initializing passive listener on {self.host}:{self.port}")
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        try:
+            self.server_socket.bind((self.host, self.port))
+            self.server_socket.listen(1)
+        except socket.error as e:
+            logger.error(f"FATAL: Could not bind to port {self.port}. Error: {e}")
+            logger.error("Is another application using this port? Or is the IP address correct?")
+            return
+
+        self.run_forever()
 
     def run_forever(self):
-        """The main loop to continuously handle InBody measurements."""
-        if not self._setup_listener():
-            return # Exit if we can't even start the listener
-        
+        """The main loop that waits for and handles connections."""
         while True:
             try:
-                print("\n" + "#"*68)
-                logger.info("Starting new measurement cycle.")
-                logger.info("Please prepare the InBody device.")
-                print("[ACTION] Press the 'START' or 'ENTER' button on the InBody to initiate a test.")
-                print("#"*68)
+                print("\n" + "="*60)
+                logger.info("SERVER IS READY. Waiting for a measurement from the InBody device...")
+                print("[ACTION] Please perform a measurement now.")
+                print("="*60)
 
-                # Step 1: Send a command to wake up the InBody.
-                # This might be what happens when you press "Enter" on the InBody screen
-                # with the Pi's IP configured.
-                if not self._send_trigger_command():
-                    logger.warning("Could not send trigger command. Will still listen for data, but it might not arrive.")
+                # Wait indefinitely for a connection
+                client_socket, addr = self.server_socket.accept()
+                logger.info(f"Connection accepted from {addr}")
 
-                # Step 2: Wait for the InBody to perform the measurement and send data back.
-                logger.info("Command sent. Now waiting for InBody to connect and send measurement data...")
-                self._wait_for_and_process_data()
+                with client_socket:
+                    # Receive data from the connection
+                    raw_data = self._receive_all_data(client_socket)
+                    if raw_data:
+                        logger.info(f"Received {len(raw_data)} bytes of data. Processing...")
+                        # Parse the data using the dedicated parser
+                        measurement_result = self.parser.parse(raw_data)
+                        self.display_results(measurement_result)
+                    else:
+                        logger.warning("Connection closed without any data being sent.")
                 
-                logger.info("Measurement cycle finished. Resetting for the next one in 5 seconds...")
-                time.sleep(5)
-
             except KeyboardInterrupt:
                 logger.info("Shutdown signal received. Exiting.")
                 break
             except Exception as e:
-                logger.error(f"An unhandled error occurred in the main loop: {e}")
-                logger.info("Restarting cycle in 15 seconds...")
-                time.sleep(15)
+                logger.error(f"An unexpected error occurred in the main loop: {e}")
+                logger.info("Restarting listener cycle in 10 seconds...")
+                time.sleep(10)
         
-        if self.listener_socket:
-            self.listener_socket.close()
+        self.server_socket.close()
+        logger.info("Server shut down.")
+
+    def _receive_all_data(self, sock: socket.socket) -> bytes:
+        """Receives all data from a socket until the HL7 end block is found or timeout."""
+        sock.settimeout(30.0) # Set a 30-second timeout for the entire reception
+        buffer = bytearray()
+        try:
+            while True:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    # Connection closed by the other side
+                    break
+                buffer.extend(chunk)
+                # Check for the end of the message
+                if FS in buffer:
+                    break
+        except socket.timeout:
+            logger.warning("Socket timed out while receiving data.")
+        
+        return bytes(buffer)
+
+    @staticmethod
+    def display_results(measurement: InBodyMeasurement):
+        """Prints the parsed measurement results in a structured format."""
+        print("\n" + "*"*25 + " PARSED MEASUREMENT " + "*"*25)
+        print(f"{'Phone Number':<20}: {measurement.phone_number}")
+        print(f"{'Weight (kg)':<20}: {measurement.weight_kg}")
+        print(f"{'Height (cm)':<20}: {measurement.height_cm}")
+        print(f"{'BMI':<20}: {measurement.bmi}")
+        print(f"{'Body Fat (%)':<20}: {measurement.percent_body_fat}")
+        
+        if measurement.errors:
+            print("-" * 64)
+            logger.warning("Parsing finished with errors:")
+            for error in measurement.errors:
+                print(f"  - {error}")
+                
+        print("*"*64 + "\n")
+
 
 if __name__ == "__main__":
-    handler = InBodyHL7Handler(
-        pi_ip=PI_IP,
-        data_port=DATA_PORT_ON_PI,
-        inbody_ip=INBODY_IP,
-        command_port=COMMAND_PORT_ON_INBODY
-    )
-    handler.run_forever()
+    listener = InBodyPassiveListener(host=PI_IP, port=DATA_PORT_ON_PI)
+    listener.start()
