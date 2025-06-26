@@ -2,121 +2,155 @@
 # -*- coding: utf-8 -*-
 
 """
-Simple InBody HL7 TCP Listener
-================================
+InBody 370s Interactive HL7 Debugger
+=====================================
 
 Description:
-- A minimal, focused script to listen for incoming HL7 data from an InBody device.
-- It binds to a specific IP and port, accepts one connection, prints whatever it
-  receives, and then exits.
-- Designed for debugging and verifying the raw data stream from the InBody.
+- Simulates a two-way HL7 communication flow with an InBody 370s.
+- Thread 1: Listens for incoming measurement data on the DATA_PORT.
+- Thread 2: Sends a simple command to the InBody's LISTENING_PORT.
+- Designed to debug scenarios where a command is required before data is sent.
 """
 
 import socket
 import logging
+import threading
+import time
 
 # --- Configuration ---
-# The IP address of the Raspberry Pi. Use '0.0.0.0' to listen on all interfaces.
-# Using the specific IP is better if you have multiple network cards.
-PI_IP = '192.168.1.50' 
+INBODY_IP = '192.168.1.100'
+PI_IP = '192.168.1.50'
 
-# The port that the InBody device is configured to SEND DATA TO.
-# This must match the "Receiving Port" or "Data Port" in the InBody settings.
-DATA_PORT = 2575
+# Port on the Pi that will LISTEN for InBody's data
+DATA_PORT_ON_PI = 2575
 
-# HL7 message terminators
-START_OF_BLOCK = b'\x0b'  # VT (Vertical Tab)
-END_OF_BLOCK = b'\x1c'    # FS (File Separator)
-CARRIAGE_RETURN = b'\x0d' # CR
+# Port on the InBody that LISTENS for our commands
+COMMAND_PORT_ON_INBODY = 2580
+
+# A test phone number to include in the command
+TEST_PHONE = "0965385123"
+
+# HL7 Terminators
+VT = b'\x0b'
+FS = b'\x1c'
+CR = b'\x0d'
 
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("SimpleListener")
 
-def main():
-    """Main function to start the listener."""
-    logger.info("Starting Simple HL7 Listener...")
-    logger.info("Binding to IP: {} on Port: {}".format(PI_IP, DATA_PORT))
-
-    # Create a TCP/IP socket
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# --- Thread 1: The Data Listener ---
+def data_listener():
+    """Listens on DATA_PORT_ON_PI for HL7 messages from the InBody."""
+    thread_name = threading.current_thread().name
+    logger.info("Starting... Will listen on {}:{}".format(PI_IP, DATA_PORT_ON_PI))
     
-    # Allow reusing the address to avoid "Address already in use" errors
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    try:
+        server_socket.bind((PI_IP, DATA_PORT_ON_PI))
+        server_socket.listen(1)
+        logger.info("Socket bound. Waiting for InBody to send data...")
+
+        # Wait for a connection from InBody with a timeout
+        server_socket.settimeout(60.0) # Wait for 60 seconds
+        client_socket, addr = server_socket.accept()
+        logger.info("Accepted connection from InBody at {}".format(addr))
+
+        with client_socket:
+            full_data = client_socket.recv(4096) # Read a large chunk of data
+            if full_data:
+                logger.info("SUCCESS! Received {} bytes of data.".format(len(full_data)))
+                print("\n" + "="*20 + " RAW HL7 DATA RECEIVED " + "="*20)
+                # Print readable data
+                readable_data = full_data.decode('utf-8', 'ignore').replace(chr(0x0d), '\n')
+                print(readable_data.strip())
+                print("="*60 + "\n")
+            else:
+                logger.warning("Connection from InBody, but no data received.")
+
+    except socket.timeout:
+        logger.warning("Listener timed out. No data received from InBody in 60 seconds.")
+    except Exception as e:
+        logger.error("An error occurred: {}".format(e))
+    finally:
+        server_socket.close()
+        logger.info("Listener thread finished.")
+
+# --- Thread 2: The Command Sender ---
+def send_command():
+    """Connects to COMMAND_PORT_ON_INBODY and sends a simple request."""
+    thread_name = threading.current_thread().name
+    logger.info("Starting... Will send a command to {}:{}".format(INBODY_IP, COMMAND_PORT_ON_INBODY))
+    
+    # Wait a moment for the listener to be ready
+    time.sleep(2) 
+
+    # This is a hypothetical HL7 "Query" or "Request" message.
+    # The exact format might be different and needs to be checked in InBody's documentation.
+    # This example requests the result for a specific patient ID (phone number).
+    timestamp = time.strftime("%Y%m%d%H%M%S")
+    message_id = "MSG" + str(int(time.time()))
+    
+    # MLLP Framing: <VT>HL7_MESSAGE<FS><CR>
+    hl7_query_message = (
+        f"MSH|^~\\&|RASPBERRY_PI|ACTIWELL|INBODY_370S|DEVICE|{timestamp}||QBP^Q22^QBP_Q21|{message_id}|P|2.5{chr(0x0d)}"
+        f"QPD|IHE_PCD_Q22^Query for Previous Patient Data^IHE_PCD|{message_id}|{TEST_PHONE}^^^PHONE{chr(0x0d)}"
+        f"RCP|I"
+    ).encode('utf-8')
+    
+    full_packet = VT + hl7_query_message + FS + CR
 
     try:
-        # Bind the socket to the port
-        server_socket.bind((PI_IP, DATA_PORT))
-
-        # Start listening for incoming connections (1 means we'll handle one connection at a time)
-        server_socket.listen(1)
-        logger.info("Successfully bound to port. Waiting for a connection from InBody...")
-        print("="*60)
-        print(">>> PLEASE PERFORM A MEASUREMENT ON THE INBODY DEVICE NOW <<<")
-        print("="*60)
-
-        # Wait for a connection (this is a blocking call)
-        client_socket, client_address = server_socket.accept()
-        logger.info("Connection accepted from: {}".format(client_address))
-
-        try:
-            full_data = bytearray()
-            # Set a timeout for receiving data (e.g., 30 seconds)
-            client_socket.settimeout(30.0)
-
-            # Loop to receive all data from the client
-            while True:
-                data = client_socket.recv(1024) # Receive up to 1024 bytes
-                if not data:
-                    # No more data from client, connection closed by InBody
-                    logger.info("Connection closed by InBody.")
-                    break
-                full_data.extend(data)
-                
-                # Check if the complete HL7 message has been received
-                if END_OF_BLOCK in full_data:
-                    logger.info("End of HL7 message detected.")
-                    break
+        logger.info("Connecting to InBody's command port...")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(10.0)
+            s.connect((INBODY_IP, COMMAND_PORT_ON_INBODY))
+            logger.info("Connected! Sending command packet ({} bytes)...".format(len(full_packet)))
             
-            # --- Data Processing ---
-            if full_data:
-                logger.info("Total data received: {} bytes".format(len(full_data)))
-                print("\n" + "-"*20 + " RAW DATA (BYTES) " + "-"*20)
-                print(full_data)
-                
-                # Try to decode to string for readability
-                try:
-                    # Replace HL7 control characters for cleaner printing
-                    readable_data = full_data.decode('utf-8', errors='ignore')
-                    readable_data = readable_data.replace('\x0b', '<VT>\n')
-                    readable_data = readable_data.replace('\x1c', '\n<FS>')
-                    readable_data = readable_data.replace('\r', '\n')
-                    
-                    print("\n" + "-"*20 + " DECODED DATA (TEXT) " + "-"*20)
-                    print(readable_data)
-                except Exception as e:
-                    logger.error("Could not decode data as UTF-8: {}".format(e))
-
+            s.sendall(full_packet)
+            logger.info("Command sent successfully.")
+            
+            # Wait for a potential ACK (Acknowledgement)
+            logger.info("Waiting for ACK from InBody...")
+            response = s.recv(1024)
+            if response:
+                logger.info("Received response/ACK from InBody: {}".format(response.decode('utf-8', 'ignore')))
             else:
-                logger.warning("No data was received from the connection.")
+                logger.warning("No ACK received, but command was sent.")
 
-        finally:
-            # Clean up the connection
-            logger.info("Closing client socket.")
-            client_socket.close()
-
-    except socket.error as e:
-        logger.error("Socket error: {}".format(e))
-        logger.error("Is the port {} already in use? Is the IP {} correct?".format(DATA_PORT, PI_IP))
-    except KeyboardInterrupt:
-        logger.info("Listener stopped by user (Ctrl+C).")
+    except socket.timeout:
+        logger.error("Connection to command port timed out. Is InBody listening on port {}?".format(COMMAND_PORT_ON_INBODY))
+    except Exception as e:
+        logger.error("Failed to send command: {}".format(e))
     finally:
-        logger.info("Closing server socket. Shutting down.")
-        server_socket.close()
+        logger.info("Command sender thread finished.")
 
-
-if __name__ == '__main__':
-    main()
+# --- Main Execution ---
+if __name__ == "__main__":
+    print("="*60)
+    print("      InBody 370s Interactive HL7 Debugger      ")
+    print("="*60)
+    
+    # Create the listener thread
+    listener_thread = threading.Thread(target=data_listener, name="HL7-Listener")
+    
+    # Create the command sender thread
+    command_thread = threading.Thread(target=send_command, name="HL7-CommandSender")
+    
+    # Start the threads
+    listener_thread.start()
+    command_thread.start()
+    
+    print("\n[INFO] Both threads have been started.")
+    print("[ACTION] Please perform a measurement on the InBody device now.")
+    print("[INFO] The script will wait for results for up to 60 seconds.\n")
+    
+    # Wait for both threads to complete
+    listener_thread.join()
+    command_thread.join()
+    
+    print("\n[INFO] Debugging session finished.")
